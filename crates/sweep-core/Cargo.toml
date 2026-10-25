@@ -1,0 +1,19 @@
+[package]
+name = "sweep-core"
+description = "Safety kernel for sweep: path policy, deletion funnel, operation log"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+libc.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+proptest = "1"
+tempfile = "3"
+sweep-testkit = { path = "../sweep-testkit" }

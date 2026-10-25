@@ -1,0 +1,183 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install base packages
+        run: pacman -Sy --noconfirm --needed base-devel git rustup
+
+      - uses: actions/checkout@v4
+
+      - name: Install stable with rustfmt and clippy
+        env:
+          RUSTUP_HOME: /opt/rustup
+          CARGO_HOME: /opt/cargo
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+
+      - name: Make the toolchain usable by the whole job
+        run: |
+          ln -sf /opt/cargo/bin/* /usr/local/bin/
+          cargo --version
+
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+
+  # The full suite must run as an ordinary user: the kernel refuses to run as
+  # root by design, and `gather_reports_the_real_machine` asserts it. Running
+  # these as root would make that assertion meaningless.
+  test:
+    name: test (unprivileged)
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install base packages
+        run: pacman -Sy --noconfirm --needed base-devel git rustup
+
+      - uses: actions/checkout@v4
+
+      - name: Install stable into a shared location
+        env:
+          RUSTUP_HOME: /opt/rustup
+          CARGO_HOME: /opt/cargo
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          # The registry and the toolchain are read-only for the test user; only
+          # the workspace needs to be writable.
+          chmod -R a+rX /opt/rustup /opt/cargo
+          mkdir -p /opt/cargo/registry
+          chown -R 1000:1000 /opt/cargo/registry
+          ln -sf /opt/cargo/bin/* /usr/local/bin/
+
+      - name: Create a test user that owns the workspace
+        run: |
+          useradd --uid 1000 --create-home --shell /bin/bash tester
+          chown -R tester /__w
+
+      - name: Tests
+        env:
+          RUSTUP_HOME: /opt/rustup
+          CARGO_HOME: /opt/cargo
+        run: su tester -c 'cargo test --workspace --all-targets'
+
+      - name: Longer property run
+        env:
+          RUSTUP_HOME: /opt/rustup
+          CARGO_HOME: /opt/cargo
+          PROPTEST_CASES: 2048
+        run: su tester -c 'cargo test --release -p sweep-core --test properties'
+
+  # The job that catches "green on ext4, wrong on btrfs". `TMPDIR` is pointed at
+  # the btrfs mount so every tempdir-based test — the honest filesystem ones, not
+  # the in-memory doubles — actually runs on btrfs.
+  btrfs:
+    name: test (btrfs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create a btrfs filesystem in a sparse file
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends btrfs-progs
+          truncate -s 1G /tmp/btrfs.img
+          sudo mkfs.btrfs -q /tmp/btrfs.img
+          sudo mkdir -p /mnt/btrfs/tmp
+          sudo mount -o loop /tmp/btrfs.img /mnt/btrfs
+          sudo chown -R "$USER" /mnt/btrfs
+          btrfs subvolume create /mnt/btrfs/@snapshots
+          mkdir -p /mnt/btrfs/@snapshots/1/snapshot/cache
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Tests, with temporary directories on btrfs
+        env:
+          TMPDIR: /mnt/btrfs/tmp
+        run: |
+          cargo build --workspace
+          cargo test --workspace --all-targets
+
+      - name: btrfs is measured, not assumed
+        run: |
+          ./target/debug/sweep doctor --json > /tmp/doctor.json
+          python3 - <<'PY'
+          import json, sys
+
+          report = json.load(open('/tmp/doctor.json'))
+          mount = next(
+              (m for m in report['mounts'] if m['mount_point'] == '/mnt/btrfs'),
+              None,
+          )
+          assert mount is not None, [m['mount_point'] for m in report['mounts']]
+          assert mount['fstype'] == 'btrfs', mount
+          assert mount['cow'] is True, mount
+          assert '/mnt/btrfs/@snapshots' in mount['snapshots'], mount
+
+          # The snapshot directory must be attributed to this mount and no other.
+          others = [
+              m['mount_point'] for m in report['mounts']
+              if m['mount_point'] != '/mnt/btrfs'
+              and any(s.startswith('/mnt/btrfs') for s in m['snapshots'])
+          ]
+          assert not others, others
+          print('btrfs facts correct')
+          PY
+
+      - name: Unmount
+        if: always()
+        run: |
+          sudo umount /mnt/btrfs || true
+          rm -f /tmp/btrfs.img
+
+  # libFuzzer needs nightly, so it stays out of the merge gate: a flaky runner
+  # must not block a pull request. It still runs per push.
+  fuzz:
+    name: fuzz (smoke)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          rustup toolchain install nightly --profile minimal
+          rustup default nightly
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+
+      - name: fuzz_validate
+        run: cargo fuzz run fuzz_validate -- -max_total_time=60
+
+      - name: fuzz_oplog_escape
+        run: cargo fuzz run fuzz_oplog_escape -- -max_total_time=60
+
+  # A broken relative link in README/SAFETY is the first sign of a stale claim.
+  docs:
+    name: docs links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every relative markdown link resolves
+        run: python3 scripts/check_links.py

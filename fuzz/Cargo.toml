@@ -1,0 +1,25 @@
+[package]
+name = "sweep-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+sweep-core = { path = "../crates/sweep-core" }
+sweep-testkit = { path = "../crates/sweep-testkit" }
+
+[[bin]]
+name = "fuzz_validate"
+path = "fuzz_targets/fuzz_validate.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_oplog_escape"
+path = "fuzz_targets/fuzz_oplog_escape.rs"
+test = false
+doc = false
