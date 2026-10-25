@@ -220,6 +220,26 @@ impl Plan {
         &self.items
     }
 
+    /// Splits the plan into the items a predicate claims and the rest.
+    ///
+    /// Both halves are moved, not re-decided: they already passed validation
+    /// against one context, and a second `validate` could disagree with the
+    /// first — at which point the plan the user confirmed would no longer be
+    /// the plan that runs. `clean` uses this to send only the root-owned items
+    /// through the privilege boundary.
+    pub fn split(&self, mut chosen: impl FnMut(&PlanItem) -> bool) -> (Plan, Plan) {
+        let mut select = Plan::new();
+        let mut rest = Plan::new();
+        for item in &self.items {
+            let target = if chosen(item) { &mut select } else { &mut rest };
+            target.seen.insert(item.path().to_path_buf());
+            target.items.push(item.clone());
+        }
+        select.finish();
+        rest.finish();
+        (select, rest)
+    }
+
     pub fn denied(&self) -> &[DeniedItem] {
         &self.denied
     }
@@ -373,5 +393,63 @@ mod tests {
         assert!(position("/tmp/a/b/c.bin") < position("/tmp/a/b"));
         assert!(position("/tmp/a/b") < position("/tmp/a"));
         assert!(position("/tmp/a/d.bin") < position("/tmp/a"));
+    }
+
+    #[test]
+    fn splitting_a_plan_accounts_for_every_item_exactly_once() {
+        // `clean` splits the plan at the privilege boundary: the user half runs
+        // in this process, the root half goes to the elevated child. An item
+        // that lands in neither half silently disappears from the run, and one
+        // that lands in both is deleted twice and reported twice.
+        let user = RuleId::new("dev.go.build-cache").unwrap();
+        let root = RuleId::new("system.man.cache").unwrap();
+        let meta = Meta {
+            blocks: 8,
+            mode: libc::S_IFREG,
+            ..Meta::default()
+        };
+        let mut plan = Plan::new();
+        for (path, rule) in [
+            ("/home/u/.cache/go-build/a", &user),
+            ("/var/cache/man/b", &root),
+            ("/home/u/.cache/go-build/c", &user),
+            ("/var/cache/man/d", &root),
+        ] {
+            plan.push_validated(PathBuf::from(path), Path::new(path), rule, &meta);
+        }
+        plan.finish();
+
+        let (root_half, user_half) = plan.split(|item| item.rule() == &root);
+
+        assert_eq!(root_half.len(), 2);
+        assert_eq!(user_half.len(), 2);
+        assert_eq!(root_half.len() + user_half.len(), plan.len());
+        assert!(root_half.items().iter().all(|item| item.rule() == &root));
+        assert!(user_half.items().iter().all(|item| item.rule() == &user));
+
+        // Byte accounting survives the split, because the caller sums the halves
+        // and expects the same total it previewed.
+        assert_eq!(
+            root_half.total_bytes() + user_half.total_bytes(),
+            plan.total_bytes()
+        );
+
+        // Each half is finished in its own right: deepest-first order still
+        // holds, and the hashes differ, so the two halves cannot be mistaken for
+        // one another in the operation log.
+        assert_ne!(root_half.hash(), user_half.hash());
+
+        // Nothing is left behind in either half.
+        let mut seen: Vec<&Path> = Vec::new();
+        seen.extend(root_half.items().iter().map(PlanItem::path));
+        seen.extend(user_half.items().iter().map(PlanItem::path));
+        for item in plan.items() {
+            assert_eq!(
+                seen.iter().filter(|path| **path == item.path()).count(),
+                1,
+                "{} must appear in exactly one half",
+                item.path().display()
+            );
+        }
     }
 }

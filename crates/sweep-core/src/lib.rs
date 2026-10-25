@@ -33,6 +33,7 @@ pub mod oplog;
 pub mod paths;
 pub mod plan;
 pub mod policy;
+pub mod privilege;
 pub mod probe;
 pub mod rules;
 pub mod scan;
@@ -48,7 +49,9 @@ pub use plan::{DeniedItem, Plan, PlanItem, RuleId};
 pub use probe::{FsProbe, OpenInodes, ProcRef, RealProbe};
 pub use rules::{Kind, Privilege, Requirement, Rule, RuleError, RuleErrorKind, RuleSet, Section};
 pub use scan::{Block, BlockKind, Collect, Entry, Limits, Select, Spec, Stats, Stop};
-pub use validate::{is_deletable, validate, AllowedRoot, Policy, Reason, ValidateCtx, Verdict};
+pub use validate::{
+    is_deletable, validate, AllowedRoot, Owner, Policy, Reason, ValidateCtx, Verdict,
+};
 
 /// Crate version, reported by `sweep doctor`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

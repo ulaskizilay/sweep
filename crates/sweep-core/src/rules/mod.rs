@@ -690,16 +690,39 @@ privilege = "user"
 
     #[test]
     fn section_totals_count_disabled_rules() {
+        // The section header says "N rules, M enabled": a rule that is switched
+        // off is still part of the catalog and must not disappear from the
+        // total, or a reviewer cannot see what exists.
         let xdg = xdg();
-        let set = RuleSet::from_sources(&builtin::sources(), &xdg).expect("builtins load");
-        let summaries = set.sections();
-        assert_eq!(summaries.len(), 16);
-        let system = summaries
-            .iter()
-            .find(|summary| summary.section == Section::System)
-            .expect("system section");
-        assert_eq!(system.enabled, 0, "system rules stay disabled until M4");
-        assert!(system.rules > 0);
+        let body = r#"
+[[rule]]
+id = "test.on"
+section = "user-essentials"
+kind = "dir-sweep"
+root = "{cache}/on"
+evidence = "a fixture that exists only in this test"
+recoverable = true
+privilege = "user"
+
+[[rule]]
+id = "test.off"
+section = "user-essentials"
+kind = "dir-sweep"
+root = "{cache}/off"
+evidence = "a fixture that exists only in this test"
+recoverable = true
+privilege = "user"
+enabled = false
+"#;
+        let set =
+            RuleSet::from_sources(&[Source::new("test.toml", body)], &xdg).expect("fixture loads");
+        let summary = set
+            .sections()
+            .into_iter()
+            .find(|summary| summary.section == Section::UserEssentials)
+            .expect("the fixture section");
+        assert_eq!(summary.rules, 2, "the total includes what is switched off");
+        assert_eq!(summary.enabled, 1);
     }
 
     #[test]

@@ -61,6 +61,11 @@ documentation. It has no effect on behaviour.
 The list is closed. A new section is a product decision (it needs a row in the
 `clean` report), not something a pack can invent.
 
+`system` is the only section allowed to declare `privilege = "root"`, and the
+only one whose items travel through the privilege boundary. Everything else runs
+as the invoking user, which is why starting the whole program as root is refused
+at startup rather than checked per rule.
+
 ### Opt-in sections
 
 `model-caches` is the only opt-in section today, and `Section::is_opt_in` is the
@@ -246,19 +251,21 @@ sweep rules verify           # compile built-ins + overlay and report every erro
 sweep clean --dry-run        # the plan, with per-section and per-rule detail
 sweep clean --dry-run --only dev-tools
 sweep clean --dry-run --only model-caches   # the opt-in section, reviewed first
+sweep clean --dry-run --only system         # root-owned caches, previewed read-only
 sweep clean                  # plan, ask once, delete through the funnel
 sweep clean --yes            # plan and delete; the form a script can use
+sweep clean --yes --privileged   # also sweep root-owned system caches
 ```
 
 | Exit code | Meaning |
 |---|---|
 | 0 | the command did what it says |
-| 1 | an applied run hit a syscall failure (the log has the reason per item), or the report could not be serialised |
+| 1 | an applied run hit a syscall failure (the log has the reason per item), the report could not be serialised, or `--privileged` could not elevate |
 | 2 | usage error: unknown command, flag or section |
 | 3 | the catalog did not compile; the reason is printed, and `--json` carries it |
 | 4 | reserved for commands a later milestone wires up |
 | 5 | the run was not confirmed; nothing was deleted and nothing was recorded |
-| 78 | this environment cannot run sweep (`$HOME` is not usable, or the process is root) |
+| 78 | this environment cannot run sweep (`$HOME` is not usable, the process is root, or `__apply` was invoked by a non-root user) |
 
 `--yes` and `--dry-run` together are a usage error: they ask for opposite
 things, and guessing which one wins is how a preview turns into a deletion. A
@@ -269,6 +276,21 @@ A confirmed run records one row per planned item in
 `~/.local/state/sweep/operations.jsonl` (`REMOVED`, `SKIPPED` with a reason code,
 or `FAILED`) and reports the plan hash it applied. A dry run, a declined prompt,
 and a plan with nothing in it write no log at all.
+
+### Rules with `privilege = "root"`
+
+Only the `system` section may delete as root; a root rule anywhere else is a
+load-time `root_privilege` error. Those rules are planned by the user process —
+reading a cache needs no privilege — and then handed to an elevated child by
+`sweep clean --privileged`, or after a yes at the prompt.
+
+The child does not read this file's overlay. It compiles `rules/01-system.toml`
+alone, from the binary, and accepts only enabled root rules with a **literal
+absolute root**: a template would expand against whichever `$HOME` the elevated
+process inherited, and the parent and child would not be agreeing about a path.
+A rule whose root is a directory the user cannot read (mode `0700`) cannot be
+planned at all, so it is disabled rather than shipped as a rule that always
+reports `permission denied`.
 
 ## Adding a rule
 

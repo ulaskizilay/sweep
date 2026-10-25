@@ -24,7 +24,8 @@
 > row per decision; `--dry-run` stops before the question and writes nothing at
 > all. The catalog is 107 rules over sixteen sections, and the section whose loss
 > may not be recoverable — downloaded model weights — is skipped unless you name
-> it.
+> it. System caches are swept through a second process: `sweep` never runs as
+> root, so it plans as you and asks before elevating.
 
 | Milestone | Scope | State |
 |---|---|---|
@@ -33,7 +34,8 @@
 | M2 | TOML rule engine, `rules list\|verify`, `clean --dry-run` | done |
 | M3a | applying the plan: confirmation gate, operation log, exit codes | done |
 | M3b | model caches: Hugging Face blob/snapshot scanner, opt-in section | done |
-| M4 | system section, privilege boundary | next |
+| M4a | system caches through `run0`/`sudo`, the privilege boundary | done |
+| M4b | `paccache` keep-versions semantics, rotated logs | next |
 | M5 | `purge`, `installer`, large files, `aur` | planned |
 | M6 | TUI: `analyze`, `status` | planned |
 | M7 | `uninstall`, `optimize`, `history`, snapshot report | planned |
@@ -97,22 +99,22 @@ silently cleans nothing on a large fraction of machines. The resolved physical
 path is re-tested against the same list, deny-only, and the delete happens
 through a directory handle opened with `RESOLVE_NO_SYMLINKS`.
 
-The full contract — including the seven residual risks that are *not* solved —
+The full contract — including the nine residual risks that are *not* solved —
 is in [`docs/SAFETY.md`](docs/SAFETY.md).
 
 ## The rules
 
 The catalog is TOML, and it is data rather than code: `rules/01-system.toml`
-through `rules/16-model-caches.toml`, 107 rules over sixteen sections, 84
+through `rules/16-model-caches.toml`, 107 rules over sixteen sections, 87
 enabled in this build. Each rule names a root, a kind, a retention and the
 sentence that justifies deleting there.
 
 ```bash
 $ sweep rules list
-sweep rules — 16 packs, 107 rules, 84 enabled
+sweep rules — 16 packs, 107 rules, 87 enabled
 
   section            rules  enabled
-  system                 8        0
+  system                 8        3
   user-essentials        5        5
   ...
   dev-tools             28       28
@@ -120,6 +122,11 @@ sweep rules — 16 packs, 107 rules, 84 enabled
   model-caches           3        3  opt-in
 
   model-caches is opt-in: `sweep clean` leaves it alone until you name it with `--only`.
+
+  system
+    system.fontconfig.cache        dir-sweep      now  root  /var/cache/fontconfig
+    system.fwupd.cache             dir-age        30d  root  /var/cache/fwupd
+    system.man.cache               dir-sweep      now  root  /var/cache/man
 
   dev-tools
     dev.cargo.crate-cache          file-pattern   30d  on    /home/u/.cargo/registry/cache
@@ -159,6 +166,30 @@ is still in `refs/`. `hf-cache` therefore plans only blobs no snapshot link
 resolves to, plus abandoned `*.incomplete` downloads, and it preserves a
 repository whose snapshot tree cannot be read completely.
 
+### Root, without becoming root
+
+`sweep` refuses to run as root at all. That is not modesty: every path it reads
+— the catalog overlay, the state directory, the log — belongs to the user, and a
+process that resolves them as root is reading a different machine's worth of
+configuration.
+
+System caches still get swept, in two steps with a question in between. The user
+process does the planning, because reading `/var/cache/man` needs no privilege.
+Then `clean` asks a second question — `--yes` answered "delete this plan", not
+"become root" — and re-executes the same binary through `run0` or `sudo` with a
+fixed argument list and the plan on standard input. No shell is involved, so a
+filename cannot become an argument.
+
+The elevated child does not trust its parent: it rebuilds the list of allowed
+roots from the compiled catalog, refuses a rule id it has never heard of,
+re-checks each inode, and re-runs the whole validation as root before removing
+anything. It also never writes the log. It prints one JSON line per item and the
+user process appends them, so root never opens a file inside your home.
+
+A pipe has nobody to ask, so a non-interactive run without `--privileged` leaves
+the root-owned items alone and says so. Nothing is deleted as you by accident,
+and nothing is deleted as root without a second answer.
+
 ## Requirements
 
 - Arch Linux, or another Linux with `/proc/self/mountinfo`
@@ -190,6 +221,7 @@ cargo build --release
 | `sweep clean --dry-run` | the plan, per section and per rule, with the reason every skip happened | works |
 | `sweep clean` | reclaim cache, log and build space; asks once, then deletes | works |
 | `sweep clean --only model-caches` | the opt-in section: model blobs, checkpoint caches | works |
+| `sweep clean --privileged` | also sweep root-owned system caches, through `run0` or `sudo` | works |
 | `sweep purge` / `installer` | project artifacts, installer leftovers | M5 |
 | `sweep analyze` / `status` | disk explorer, health summary | M6 |
 | `sweep uninstall` / `optimize` / `history` | package removal, maintenance, past actions | M7 |

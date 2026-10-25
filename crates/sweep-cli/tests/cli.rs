@@ -259,6 +259,198 @@ fn a_real_uid_zero_process_is_refused() {
     );
 }
 
+#[test]
+fn the_hidden_apply_command_is_not_in_the_help_and_refuses_a_normal_user() {
+    // `clean` starts this command through run0/sudo with the plan on stdin. It
+    // must stay out of the command list, and a user who types it must be told
+    // what it is instead of seeing a stack of `EACCES` failures.
+    let help = run(&["--help"]);
+    assert!(
+        !help.stdout.contains("__apply"),
+        "the elevation helper is not a user command:\n{}",
+        help.stdout
+    );
+
+    let output = run(&["__apply"]);
+    assert_eq!(
+        output.code,
+        Some(78),
+        "the helper must refuse a normal user the way any unsupported environment is refused; \
+         stderr: {}",
+        output.stderr
+    );
+    assert!(
+        output.stderr.contains("elevation helper"),
+        "the refusal must say what this command is: {:?}",
+        output.stderr
+    );
+    assert!(
+        output.stderr.contains("sweep clean"),
+        "the refusal must name the command the user meant: {:?}",
+        output.stderr
+    );
+    assert!(
+        output.stdout.trim().is_empty(),
+        "a refusal must not emit a reply the parent could read as a result: {:?}",
+        output.stdout
+    );
+}
+
+#[test]
+fn clean_help_lists_the_privileged_flag() {
+    let output = run(&["clean", "--help"]);
+    assert_eq!(output.code, Some(0));
+    assert!(
+        output.stdout.contains("--privileged"),
+        "the flag that sweeps the system section must be discoverable:\n{}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("root-owned"),
+        "the flag must say what it unlocks:\n{}",
+        output.stdout
+    );
+}
+
+#[test]
+fn the_apply_helper_is_reachable_only_when_the_process_really_is_root() {
+    // The one exception to "sweep never runs as root". Inside a user namespace
+    // the binary is uid 0, so the helper must get past the guard and read a
+    // request - and with stdin at EOF there is no request, which is an error
+    // rather than a refusal. That is what proves the guard is about the uid and
+    // not a stub that always says no.
+    let probe = Command::new("unshare")
+        .args(["-r", "id", "-u"])
+        .output()
+        .ok();
+    let uid_zero = probe
+        .as_ref()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim() == "0")
+        .unwrap_or(false);
+    if !uid_zero {
+        eprintln!("skipping: unprivileged user namespaces unavailable");
+        return;
+    }
+
+    let output = Command::new("unshare")
+        .arg("-r")
+        .arg(env!("CARGO_BIN_EXE_sweep"))
+        .arg("__apply")
+        .output()
+        .expect("spawn under unshare");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an empty request is a failure, not a refusal; stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("sweep __apply:"),
+        "the error must name the command: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains("elevation helper"),
+        "uid 0 is the one caller this command accepts: {stderr:?}"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "nothing was asked for, so nothing is reported"
+    );
+}
+
+/// Hex, the way the child expects a path: bytes, not a lossy string.
+fn hex_path(path: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    path.as_os_str()
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+#[test]
+fn the_child_reports_a_path_outside_the_allowlist_instead_of_removing_it() {
+    // The interesting half of the boundary is what the child does with a
+    // request the parent should never have sent: it answers per item rather
+    // than trusting the caller, and the answer is a refusal. Run under
+    // `unshare -r` because the child only starts as root; the namespace keeps
+    // that from being a real privilege escalation.
+    let probe = Command::new("unshare")
+        .args(["-r", "id", "-u"])
+        .output()
+        .ok();
+    let uid_zero = probe
+        .as_ref()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim() == "0")
+        .unwrap_or(false);
+    if !uid_zero {
+        eprintln!("skipping: unprivileged user namespaces unavailable");
+        return;
+    }
+
+    use std::io::Write;
+    use std::os::unix::fs::MetadataExt;
+
+    let home = home();
+    let victim = home.path().join("not-a-system-cache");
+    std::fs::write(&victim, "payload").expect("write");
+    let meta = std::fs::symlink_metadata(&victim).expect("stat");
+
+    let request = serde_json::json!({
+        "cmd": "clean",
+        "session": "clean-test",
+        "items": [{
+            "rule": "system.man.cache",
+            "path_hex": hex_path(&victim),
+            "dev": meta.dev(),
+            "ino": meta.ino(),
+            "is_dir": false,
+            "bytes": 7,
+        }],
+    })
+    .to_string();
+
+    let mut child = Command::new("unshare")
+        .arg("-r")
+        .arg(env!("CARGO_BIN_EXE_sweep"))
+        .arg("__apply")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn under unshare");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(request.as_bytes())
+        .expect("write the request");
+    let output = child.wait_with_output().expect("wait");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a request the child can judge is not an error; stdout={stdout:?} stderr={stderr:?}"
+    );
+
+    let reply: serde_json::Value = stdout
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("one JSON object per item"))
+        .expect("one result for the one item");
+    assert_eq!(reply["rule"], "system.man.cache");
+    assert_eq!(reply["action"], "SKIPPED");
+    assert_eq!(
+        reply["code"], "not_in_allowed_root",
+        "the child decides against its own allowlist, not the parent's: {reply}"
+    );
+    assert!(victim.exists(), "a refused path is still there");
+}
+
 // ----------------------------------------------------------------- rules ---
 
 fn home() -> tempfile::TempDir {
@@ -487,7 +679,11 @@ fn clean_without_yes_on_a_pipe_declines_and_writes_nothing() {
 
     // `Command::output` gives the child a null stdin, which is the case a cron
     // job hits: there is nobody to answer the prompt.
-    let output = run_in(home.path(), &["clean"]);
+    //
+    // Scoped to the section the fixture lives in. A bare run also plans the
+    // root-owned system caches on the host, which would make this test depend on
+    // the machine it runs on and ask a second question it is not about.
+    let output = run_in(home.path(), &["clean", "--only", "browsers"]);
     assert_eq!(
         output.code,
         Some(5),
@@ -539,7 +735,7 @@ fn clean_yes_removes_only_planned_paths_and_logs_them() {
     );
 
     let before = snapshot(home.path());
-    let output = run_in(home.path(), &["clean", "--yes"]);
+    let output = run_in(home.path(), &["clean", "--yes", "--only", "browsers"]);
     assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
     assert!(
         output.stdout.contains("applying the plan"),
@@ -608,7 +804,10 @@ fn clean_dry_run_and_apply_describe_the_same_plan() {
         "cache body",
     );
 
-    let preview = run_in(home.path(), &["clean", "--dry-run", "--json"]);
+    let preview = run_in(
+        home.path(),
+        &["clean", "--dry-run", "--json", "--only", "browsers"],
+    );
     assert_eq!(preview.code, Some(0), "stderr: {}", preview.stderr);
     let preview: serde_json::Value = serde_json::from_str(&preview.stdout).expect("one document");
     assert_eq!(preview["mode"], "dry-run");
@@ -620,7 +819,10 @@ fn clean_dry_run_and_apply_describe_the_same_plan() {
     let would = preview["funnel"]["would_remove"].as_u64().unwrap_or(0);
     assert!(would > 0, "the fixture must plan something: {preview}");
 
-    let applied = run_in(home.path(), &["clean", "--yes", "--json"]);
+    let applied = run_in(
+        home.path(),
+        &["clean", "--yes", "--json", "--only", "browsers"],
+    );
     assert_eq!(applied.code, Some(0), "stderr: {}", applied.stderr);
     let applied: serde_json::Value = serde_json::from_str(&applied.stdout).expect("one document");
     assert_eq!(applied["mode"], "apply");
@@ -697,7 +899,13 @@ fn a_tool_cache_rule_removes_its_root_and_nothing_beside_it() {
 #[test]
 fn clean_yes_with_nothing_to_plan_exits_zero_and_writes_no_log() {
     let home = home();
-    let output = run_in(home.path(), &["clean", "--yes"]);
+    // Scoped to a section the fixture leaves empty. A bare run on a machine with
+    // system caches does have something to plan, so "nothing to remove" is a
+    // property of the chosen section, not of the host.
+    let output = run_in(
+        home.path(),
+        &["clean", "--yes", "--only", "user-essentials"],
+    );
     assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
     assert!(
         output.stdout.contains("Nothing to remove"),
@@ -971,7 +1179,7 @@ fn clean_dry_run_plans_a_real_target_and_writes_nothing() {
     );
     let before = snapshot(home.path());
 
-    let output = run_in(home.path(), &["clean", "--dry-run"]);
+    let output = run_in(home.path(), &["clean", "--dry-run", "--only", "browsers"]);
     assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
     assert!(
         output.stdout.contains("dry run, nothing is deleted"),
@@ -1007,8 +1215,14 @@ fn clean_dry_run_json_is_one_document_with_a_repeatable_plan_hash() {
         "cache body",
     );
 
-    let first = run_in(home.path(), &["clean", "--dry-run", "--json"]);
-    let second = run_in(home.path(), &["clean", "--dry-run", "--json"]);
+    let first = run_in(
+        home.path(),
+        &["clean", "--dry-run", "--json", "--only", "browsers"],
+    );
+    let second = run_in(
+        home.path(),
+        &["clean", "--dry-run", "--json", "--only", "browsers"],
+    );
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
 

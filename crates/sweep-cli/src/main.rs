@@ -12,6 +12,8 @@ mod rules;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use sweep_core::privilege;
+use sweep_core::probe::RealProbe;
 use sweep_core::rules::Section;
 
 #[derive(Debug, Parser)]
@@ -58,10 +60,28 @@ enum Command {
         #[arg(long)]
         yes: bool,
 
+        /// Also sweep root-owned system caches, through run0 or sudo.
+        ///
+        /// Without this flag, an interactive run asks once before elevating and
+        /// a non-interactive run leaves the system section in place.
+        #[arg(long)]
+        privileged: bool,
+
         /// Restrict the run to one or more sections (`--only dev-tools`).
         #[arg(long, value_name = "SECTION")]
         only: Vec<Section>,
     },
+
+    /// Internal: remove root-owned items on behalf of `clean`.
+    ///
+    /// Hidden, undocumented and never called by a user. It exists so the
+    /// elevated process is this same binary: the parent starts it through
+    /// `run0` or `sudo` with a fixed argv and the plan on stdin, and the child
+    /// re-derives the allowlist from the compiled catalog instead of trusting
+    /// the parent. It takes no arguments, because an argv is something the
+    /// caller of a privileged program can influence and a pipe is not.
+    #[command(name = "__apply", hide = true)]
+    Apply,
 }
 
 #[derive(Debug, Subcommand)]
@@ -98,22 +118,73 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
 
-    // Checked before dispatch, so no command can acquire a privileged habit:
-    // the whole program becomes unreachable as root rather than each new
+    let command = cli.command;
+
+    // The elevated child is the one process that must be root, and it is
+    // checked here rather than in `refuse_root`: every other command keeps the
+    // blanket refusal, so a new subcommand cannot inherit a privileged habit by
+    // being added after this match.
+    if matches!(command, Command::Apply) {
+        return apply_child();
+    }
+
+    // Checked before dispatch, so no other command can acquire a privileged
+    // habit: the whole program becomes unreachable as root rather than each new
     // subcommand remembering to refuse.
     if let Err(message) = refuse_root(current_uid()) {
         eprintln!("sweep: {message}");
         return ExitCode::from(EXIT_UNSUPPORTED_ENVIRONMENT);
     }
 
-    match cli.command {
+    match command {
         Command::Doctor => doctor::run(cli.json),
         Command::Rules { command } => match command {
             RulesCommand::List => rules::list(cli.json, cli.verbose),
             RulesCommand::Verify => rules::verify(cli.json, cli.verbose),
         },
-        Command::Clean { dry_run, yes, only } => {
-            clean::run(cli.json, cli.verbose, &only, dry_run, yes)
+        Command::Clean {
+            dry_run,
+            yes,
+            privileged,
+            only,
+        } => clean::run(cli.json, cli.verbose, &only, dry_run, yes, privileged),
+        Command::Apply => unreachable!("handled before the root refusal"),
+    }
+}
+
+/// The body of `sweep __apply`: the elevated half of `clean`.
+///
+/// It refuses to run as anyone but root, so a user who types the hidden name
+/// learns what it is instead of watching it fail on the first `EACCES`. The
+/// refusal is not `refuse_root`'s: that message is aimed at a user who ran the
+/// whole program as root, and this process is supposed to be root.
+fn apply_child() -> ExitCode {
+    if current_uid() != 0 {
+        eprintln!(
+            "sweep __apply: this is clean's internal elevation helper and runs only as root; \
+             run `sweep clean` as your normal user instead"
+        );
+        return ExitCode::from(EXIT_UNSUPPORTED_ENVIRONMENT);
+    }
+
+    let probe = match RealProbe::new() {
+        Ok(probe) => probe.with_open_scan(),
+        Err(error) => {
+            eprintln!("sweep __apply: cannot probe this filesystem: {error}");
+            return ExitCode::from(EXIT_UNSUPPORTED_ENVIRONMENT);
+        }
+    };
+
+    let stdin = std::io::stdin();
+    let mut stdout = std::io::stdout();
+    match privilege::run_child(stdin.lock(), &mut stdout, &probe) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            // The parent treats a nonzero status as "the elevated half did not
+            // run" and leaves the items in place, so this must not pretend the
+            // request succeeded.
+            eprintln!("sweep __apply: {error}");
+            ExitCode::FAILURE
         }
     }
 }

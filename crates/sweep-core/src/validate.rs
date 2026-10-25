@@ -21,6 +21,19 @@ use crate::paths::{has_control_bytes, has_parent_component, is_within, normalize
 use crate::policy;
 use crate::probe::FsProbe;
 
+/// Who must own everything a root's deletions touch.
+///
+/// The default is the uid this process runs as. A system cache is the other
+/// case: `/var/cache/pacman/pkg` is root-owned, and the run that removes it is
+/// the elevated child, so the expected owner is 0 rather than whoever asked.
+/// Pinning it either way is a refusal to delete a file whose owner changed
+/// between planning and removal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Owner {
+    Caller,
+    Root,
+}
+
 /// A rule root that deletions are allowed inside.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AllowedRoot {
@@ -31,6 +44,8 @@ pub struct AllowedRoot {
     /// Whether the root directory itself may be deleted. Always `false` for
     /// cache roots: the sweep removes their children.
     pub allow_root_itself: bool,
+    /// Which uid every target below this root must carry.
+    pub owner: Owner,
 }
 
 impl AllowedRoot {
@@ -39,7 +54,18 @@ impl AllowedRoot {
             path: normalize(&path.into()),
             device: None,
             allow_root_itself: false,
+            owner: Owner::Caller,
         }
+    }
+
+    /// Requires every target to be owned by uid 0.
+    ///
+    /// Only the privilege boundary constructs this, and the child applies it
+    /// again with its own eyes: the parent's belief about who owns a file is
+    /// never the last word.
+    pub fn owned_by_root(mut self) -> Self {
+        self.owner = Owner::Root;
+        self
     }
 
     /// Pins the root to the device it currently lives on.
@@ -341,7 +367,12 @@ pub fn validate(path: &Path, ctx: &ValidateCtx<'_>) -> Verdict {
     }
 
     // ---- 7. Ownership. ----
-    let required_uid = ctx.probe.euid();
+    let required_uid = match allowed.owner {
+        Owner::Caller => ctx.probe.euid(),
+        // A system cache is root-owned by definition; anything else below the
+        // root is somebody else's file and stays.
+        Owner::Root => 0,
+    };
     if physical_meta.uid != required_uid {
         return deny(Reason::ForeignOwner(physical_meta.uid));
     }

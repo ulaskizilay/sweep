@@ -1,23 +1,29 @@
 # System caches that live outside the home directory.
 #
-# Every rule here is disabled. Two things are missing on purpose:
+# These run through the privilege boundary: `clean` plans them in the user
+# process (reading a cache needs no privilege), asks separately before
+# elevating, and then the same binary re-executes itself through `run0` or
+# `sudo` with the plan on stdin. The child re-derives this list from the
+# compiled catalog and refuses any rule id that is not on it, so a user overlay
+# cannot widen root deletion.
 #
-#   * the privilege boundary (M4) - sweep runs as the user and refuses
-#     root-owned files, so these roots would produce a screen of
-#     `foreign_owner` refusals rather than a preview;
-#   * `paccache` semantics (M4) - the package cache keeps the last N versions
-#     of each package, not "everything older than N days". An age cut-off is a
-#     proxy that can delete the only copy of the running kernel's package.
+# What is still disabled, and why:
 #
-# Reporting is different: reading a path needs no privilege, so the report-only
-# rules below could run today. They stay disabled until the section has a
-# report of its own, because a `clean` that walks `/var/lib/systemd/coredump`
-# without explaining the result is noise.
+#   * `system.pacman.package-cache` needs `paccache` semantics (keep the last N
+#     versions of each package), not an age cut-off. An age proxy can delete the
+#     only copy of the running kernel's package.
+#   * The report-only rules stay off: reading a path needs no privilege, so they
+#     could run, but a `clean` that walks `/var/lib/systemd/coredump` without
+#     explaining the result is noise.
+#   * `system.log.rotated` is a supported kind but stays off until rotated logs
+#     are reviewed as their own change: `/var/log` is shared with services that
+#     reopen their files on SIGHUP rather than on demand.
 
 [meta]
 name = "system"
 description = "Package, font, man page, firmware and log caches outside $HOME"
 
+# Disabled until the version-aware handler lands; see the header.
 [[rule]]
 id = "system.pacman.package-cache"
 section = "system"
@@ -38,8 +44,14 @@ evidence = "Fontconfig rebuilds its index on the next font query."
 recoverable = true
 keep_days = 0
 privilege = "root"
-enabled = false
+enabled = true
 
+# `/var/cache/ldconfig` is mode 0700 root on a default install, so the user
+# process cannot read it at all. Enabling it would only ever print `permission
+# denied`: planning happens as the user, and a cache that is invisible before
+# the password prompt cannot be shown in the plan the password confirms.
+# `aux-cache` is a few hundred kilobytes anyway; read it as root by hand if it
+# ever matters.
 [[rule]]
 id = "system.ldconfig.cache"
 section = "system"
@@ -60,7 +72,7 @@ evidence = "Formatted man pages are rebuilt from the source pages in /usr/share/
 recoverable = true
 keep_days = 0
 privilege = "root"
-enabled = false
+enabled = true
 
 [[rule]]
 id = "system.fwupd.cache"
@@ -71,7 +83,7 @@ evidence = "Firmware metadata and downloaded payloads are fetched again from the
 recoverable = true
 keep_days = 30
 privilege = "root"
-enabled = false
+enabled = true
 
 # `journalctl --vacuum-time` owns journald's rotation. sweep reads the size and
 # never deletes: a journal file removed behind journald's back leaves the index

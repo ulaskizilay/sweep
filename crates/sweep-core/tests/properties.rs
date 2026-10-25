@@ -393,6 +393,7 @@ fn a_path_on_another_device_is_refused() {
         path: PathBuf::from("/home/u/.cache"),
         device: Some(1),
         allow_root_itself: false,
+        owner: sweep_core::validate::Owner::Caller,
     }];
     let ctx = ctx(&xdg, &probe, &allowed);
     assert_eq!(

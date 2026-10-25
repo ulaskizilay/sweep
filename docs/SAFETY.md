@@ -316,9 +316,53 @@ be exercised by whoever ran the suite from a root shell, which is exactly
 nobody.
 
 System sections request privilege for themselves, through one narrow path, and
-never persist the choice across commands. Nothing in the current milestone
-performs a privileged operation; the boundary is in place before the first
-section that needs it.
+never persist the choice across commands.
+
+### The boundary is a second process, not a second identity
+
+A system cache is root-owned, and the user process must not become root to read
+it. So the work is split in two:
+
+1. **Plan as the user.** Reading `/var/cache/man` needs no privilege. Every
+   candidate is validated against an allowed root that requires its target to be
+   owned by **uid 0** (`AllowedRoot::owned_by_root`), whatever uid is asking.
+2. **Ask a second question.** `--yes` answers "delete this plan", not "become
+   root". Elevation is its own consent: `--privileged` grants it, a terminal
+   prompt asks for it, and a run whose stdin is not a terminal declines. The
+   refusal is not an error: the root items are logged as `SKIPPED` /
+   `not_elevated`, the user items still happen, and the summary says how many
+   were left in place.
+3. **Apply as root in the same binary.** The parent re-executes `sweep` through
+   `run0` (preferred) or `sudo` with a **fixed argv** — `--`, the current
+   executable, `__apply` — and the request on **stdin**. No shell exists between
+   the two processes, so no path can be word-split, globbed or interpreted, and
+   nothing on the command line can add an argument to a privileged program.
+
+The child trusts nothing the parent says:
+
+* It **re-derives its allowlist from the compiled catalog**, not from the
+  overlay and not from the request. Only enabled `privilege = "root"` rules in
+  the `system` section with a literal absolute root are included; a rule id it
+  does not know refuses the whole request.
+* It **re-checks `dev`/`ino`** against the plan, so a file swapped while the
+  password prompt was open is skipped (`race_changed`), not removed.
+* It **re-runs the full validation** as root, including the ownership pin, the
+  mount checks, the snapshot refusal and the open-file scan. The parent's
+  preview is not evidence; the child's own eyes are.
+* It **never writes the operation log**. It prints one JSON line per item on
+  stdout, and the user process appends those rows. Root therefore never opens a
+  file inside the user's state directory, and the audit trail keeps one writer.
+* It **refuses to run as anything but root**: typing the hidden command as a
+  user exits 78 with a sentence naming what the command is, instead of a stack of
+  `EACCES` failures.
+
+Paths travel as **hex**, not text. A path is bytes; a lossy string would name a
+different file, and the wire format is the one place where that mistake would be
+invisible.
+
+The trade-off is explicit: the elevated child is a little more code than a
+`sudo rm` wrapper, and the alternative — one process that acquires privilege and
+then keeps walking a directory tree — is a much larger privileged surface.
 
 ---
 
@@ -394,6 +438,29 @@ indistinguishable from one whose client died, so `hf-cache` will plan it. The
 cost is a re-download — the partial bytes are the only thing lost — and the
 90-day default is what keeps that from being a nuisance. There is no marker on
 disk that separates the two cases, so this is accepted rather than solved.
+
+### R8. A root-only cache cannot be planned
+
+Planning happens as the user, before any password is typed. A root cache with
+`0700` permissions — `/var/cache/ldconfig` on a default Arch install — is
+therefore invisible: the rule reports `permission denied`, the summary says the
+cache could not be read, and nothing from it is planned. `/var/cache/ldconfig`
+is disabled in the catalog for exactly that reason rather than shipped as a rule
+that can never fire.
+
+Solving this means the child would have to *propose* the items and the user
+would confirm a plan built by root. That is a larger change, it weakens the
+"the plan you confirmed is the plan that runs" property, and `aux-cache` is a few
+hundred kilobytes — not worth the trade today. Caches that are world-readable,
+which is most of them (`/var/cache/man`, `/var/cache/fontconfig`), plan normally.
+
+### R9. The preview's open-file scan is weaker than the child's
+
+`/proc/<pid>/fd` is readable only for the caller's own processes. The user
+process therefore cannot see that a root daemon holds a file open, so a preview
+may list an item the child will refuse. The direction of that error is the safe
+one — the preview over-counts, the apply refuses — and the child, running as
+root, performs the scan with full visibility before it removes anything.
 
 ---
 

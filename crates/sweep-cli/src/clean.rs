@@ -24,7 +24,7 @@
 //! older than the cutoff. A single fresh file, a symlink or an excluded child
 //! keeps the subtree.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
@@ -32,8 +32,9 @@ use std::process::ExitCode;
 use serde::Serialize;
 use sweep_core::fs_facts::MountTable;
 use sweep_core::model_cache::{self, Leftover};
-use sweep_core::oplog::Oplog;
+use sweep_core::oplog::{encode_path, rfc3339, Action, Oplog, Record};
 use sweep_core::paths::is_within;
+use sweep_core::privilege::{self, Elevator, SystemElevator};
 use sweep_core::probe::RealProbe;
 use sweep_core::rules::{Kind, Privilege, Rule, RuleSet, Section};
 use sweep_core::scan::{self, BlockKind, Collect, Entry, Limits, Select, Spec, Stop};
@@ -47,7 +48,6 @@ enum Status {
     Planned,
     ReportOnly,
     DeclaredDisabled,
-    NeedsRoot,
     /// A section that is only swept when the user names it (`--only`).
     OptIn,
     MissingRequirement,
@@ -69,7 +69,6 @@ impl Status {
             Status::Planned => "planned",
             Status::ReportOnly => "report-only",
             Status::DeclaredDisabled => "disabled by the catalog",
-            Status::NeedsRoot => "needs root; arrives in M4",
             Status::OptIn => "opt-in section, not selected",
             Status::MissingRequirement => "tool not installed",
             Status::NotPresent => "path not present",
@@ -143,16 +142,101 @@ impl FunnelReport {
             skip_codes: report
                 .skip_codes()
                 .into_iter()
-                .map(|(code, count)| SkipCode { code, count })
+                .map(|(code, count)| SkipCode {
+                    code: code.to_string(),
+                    count,
+                })
                 .collect(),
         }
     }
 }
 
+impl FunnelReport {
+    /// Adds the elevated half to the user half, so the summary counts one run.
+    fn merge(&mut self, other: &FunnelReport) {
+        self.removed += other.removed;
+        self.would_remove += other.would_remove;
+        self.skipped += other.skipped;
+        self.failed += other.failed;
+        self.bytes = self.bytes.saturating_add(other.bytes);
+        for code in &other.skip_codes {
+            match self
+                .skip_codes
+                .iter_mut()
+                .find(|seen| seen.code == code.code)
+            {
+                Some(seen) => seen.count += code.count,
+                None => self.skip_codes.push(SkipCode {
+                    code: code.code.clone(),
+                    count: code.count,
+                }),
+            }
+        }
+        self.skip_codes
+            .sort_by(|left, right| left.code.cmp(&right.code));
+    }
+
+    /// Records `count` items that were never attempted, under one reason.
+    ///
+    /// "Not elevated" is a decision, not a syscall failure, so it belongs with
+    /// the other skips: the ledger says what happened to every planned item
+    /// without pretending the attempt was made.
+    fn count_skips(&mut self, code: &'static str, count: usize) {
+        self.skipped += count;
+        match self.skip_codes.iter_mut().find(|seen| seen.code == code) {
+            Some(seen) => seen.count += count,
+            None => self.skip_codes.push(SkipCode {
+                code: code.to_string(),
+                count,
+            }),
+        }
+        self.skip_codes
+            .sort_by(|left, right| left.code.cmp(&right.code));
+    }
+
+    /// The same shape, built from what the elevated child reported.
+    fn of_reply(reply: &privilege::Reply) -> Self {
+        let mut out = Self::default();
+        for result in &reply.results {
+            match result.action {
+                Action::Removed => {
+                    out.removed += 1;
+                    out.bytes = out.bytes.saturating_add(result.bytes);
+                }
+                Action::WouldRemove => out.would_remove += 1,
+                Action::Failed => out.failed += 1,
+                Action::Skipped => {
+                    out.skipped += 1;
+                    let code = result.code.clone().unwrap_or_else(|| "unknown".to_string());
+                    match out.skip_codes.iter_mut().find(|seen| seen.code == code) {
+                        Some(seen) => seen.count += 1,
+                        None => out.skip_codes.push(SkipCode { code, count: 1 }),
+                    }
+                }
+            }
+        }
+        out.skip_codes
+            .sort_by(|left, right| left.code.cmp(&right.code));
+        out
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct SkipCode {
-    code: &'static str,
+    /// Owned because the elevated child reports codes this process never
+    /// contains as a literal.
+    code: String,
     count: usize,
+}
+
+/// What happened to the root-owned half of the plan.
+#[derive(Debug, Serialize)]
+struct ElevationReport {
+    /// `applied`, `declined`, `unavailable` or `failed`.
+    status: &'static str,
+    requested: usize,
+    bytes: u64,
+    detail: Option<String>,
 }
 
 /// Where this run's rows went. Absent from a dry run, which logs nothing.
@@ -178,6 +262,8 @@ struct CleanReport {
     rules: Vec<RuleRun>,
     refusals: Vec<Refusal>,
     funnel: FunnelReport,
+    /// Present only when the plan contained root-owned items.
+    elevation: Option<ElevationReport>,
     log: Option<LogRef>,
     totals: Totals,
     /// Things a user must know before trusting the numbers above.
@@ -194,7 +280,14 @@ struct Totals {
     bytes: u64,
 }
 
-pub fn run(json: bool, verbose: u8, only: &[Section], dry_run: bool, yes: bool) -> ExitCode {
+pub fn run(
+    json: bool,
+    verbose: u8,
+    only: &[Section],
+    dry_run: bool,
+    yes: bool,
+    privileged: bool,
+) -> ExitCode {
     let xdg = match Xdg::from_env() {
         Ok(xdg) => xdg,
         Err(error) => {
@@ -238,9 +331,33 @@ pub fn run(json: bool, verbose: u8, only: &[Section], dry_run: bool, yes: bool) 
     let Built { plan, mut report } =
         build(&set, &xdg, &probe, &mounts, only, &Limits::default(), mode);
 
+    // Which rules the elevated child may act on. Derived from the loaded
+    // catalog rather than from the plan, so an overlay rule can never be sent
+    // to a process that would refuse it anyway.
+    let privileged_rules = privileged_rule_ids(&set);
+
     if mode.is_dry_run() {
+        // The preview covers the whole plan, including the root-owned half: a
+        // dry run that hid half the items because they need a password would
+        // report a total that is not the plan.
         let preview = funnel::apply(&plan, &probe, Mode::DryRun, "clean", None);
         report.funnel = FunnelReport::of(&preview, mode);
+        let (root_plan, _) = plan.split(|item| privileged_rules.contains(item.rule().as_str()));
+        if !root_plan.is_empty() {
+            let requested = root_plan.len();
+            let bytes = root_plan.total_bytes();
+            report.elevation = Some(ElevationReport {
+                status: "not_attempted",
+                requested,
+                bytes,
+                detail: Some("a dry run never elevates".to_string()),
+            });
+            report.notes.push(format!(
+                "{requested} of the planned items ({}) are root-owned; applying them needs \
+                 `--privileged` or a yes at the prompt",
+                human_bytes(bytes)
+            ));
+        }
         return finish(json, verbose, &report, 0);
     }
 
@@ -279,10 +396,15 @@ pub fn run(json: bool, verbose: u8, only: &[Section], dry_run: bool, yes: bool) 
         }
     };
 
-    let applied = funnel::apply(&plan, &probe, Mode::Apply, "clean", oplog.as_mut());
-    report.funnel = FunnelReport::of(&applied, mode);
+    // The two halves are applied differently. User items go through the funnel
+    // in this process; root items go through the privilege boundary. A root item
+    // is never attempted as the user, because `EACCES` would then be reported as
+    // a syscall failure when it is a permission boundary doing its job.
+    let (root_plan, user_plan) = plan.split(|item| privileged_rules.contains(item.rule().as_str()));
 
-    let code = if applied.failed > 0 {
+    let applied = funnel::apply(&user_plan, &probe, Mode::Apply, "clean", oplog.as_mut());
+    let mut funnel_report = FunnelReport::of(&applied, mode);
+    let mut code = if applied.failed > 0 {
         eprintln!(
             "sweep clean: {} items could not be removed and were left in place; \
              the operation log has the reason for each",
@@ -292,10 +414,154 @@ pub fn run(json: bool, verbose: u8, only: &[Section], dry_run: bool, yes: bool) 
     } else {
         0
     };
+
+    if !root_plan.is_empty() {
+        let requested = root_plan.len();
+        let bytes = root_plan.total_bytes();
+        match elevate_consent(requested, bytes, privileged) {
+            Elevation::Granted => match SystemElevator::discover() {
+                Ok(elevator) => {
+                    let outcome = apply_root(
+                        &root_plan,
+                        &privileged_rules,
+                        &session,
+                        &elevator,
+                        oplog.as_mut(),
+                    );
+                    match outcome {
+                        Ok(elevated) => {
+                            if elevated.failed > 0 {
+                                eprintln!(
+                                    "sweep clean: {} root-owned items could not be removed; \
+                                     the operation log has the reason for each",
+                                    elevated.failed
+                                );
+                                code = 1;
+                            }
+                            if elevated.removed > 0 {
+                                report.notes.push(format!(
+                                    "{} of {requested} root-owned items ({}) were removed as root",
+                                    elevated.removed,
+                                    human_bytes(elevated.bytes)
+                                ));
+                            }
+                            let status = if elevated.failed > 0 {
+                                "failed"
+                            } else if elevated.removed == 0 {
+                                // Nothing failed and nothing was removed: the
+                                // child re-validated and refused. That is the
+                                // boundary working, not a syscall error.
+                                "refused"
+                            } else {
+                                "applied"
+                            };
+                            funnel_report.merge(&elevated);
+                            report.elevation = Some(ElevationReport {
+                                status,
+                                requested,
+                                bytes,
+                                detail: None,
+                            });
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "sweep clean: {requested} root-owned items were left in place: \
+                                 elevation did not run ({error})"
+                            );
+                            skip_unattempted(oplog.as_mut(), &root_plan, "elevation_failed");
+                            funnel_report.count_skips("elevation_failed", requested);
+                            report.notes.push(format!(
+                                "{requested} root-owned items ({}) were left in place because \
+                                 elevation did not run: {error}",
+                                human_bytes(bytes)
+                            ));
+                            report.elevation = Some(ElevationReport {
+                                status: "failed",
+                                requested,
+                                bytes,
+                                detail: Some(error.to_string()),
+                            });
+                            code = 1;
+                        }
+                    }
+                }
+                Err(error) => {
+                    eprintln!("sweep clean: {error}");
+                    skip_unattempted(oplog.as_mut(), &root_plan, "elevation_unavailable");
+                    funnel_report.count_skips("elevation_unavailable", requested);
+                    report.notes.push(format!(
+                        "{requested} root-owned items ({}) were left in place: {error}",
+                        human_bytes(bytes)
+                    ));
+                    report.elevation = Some(ElevationReport {
+                        status: "unavailable",
+                        requested,
+                        bytes,
+                        detail: Some(error.to_string()),
+                    });
+                    if privileged {
+                        // The user asked for the system half explicitly; not
+                        // delivering it is a failure, not a quiet partial run.
+                        code = 1;
+                    }
+                }
+            },
+            Elevation::Declined(message) => {
+                skip_unattempted(oplog.as_mut(), &root_plan, "not_elevated");
+                funnel_report.count_skips("not_elevated", requested);
+                report.notes.push(format!(
+                    "{requested} root-owned items ({}) were left in place: {message}",
+                    human_bytes(bytes)
+                ));
+                report.elevation = Some(ElevationReport {
+                    status: "declined",
+                    requested,
+                    bytes,
+                    detail: Some(message),
+                });
+            }
+        }
+    }
+    report.funnel = funnel_report;
+
     // Drop the handle before reporting so a buffered record cannot outlive the
     // summary that says the log was written.
     drop(oplog);
     finish(json, verbose, &report, code)
+}
+
+/// The rule ids whose items belong to the elevated child.
+fn privileged_rule_ids(set: &RuleSet) -> BTreeSet<String> {
+    set.rules()
+        .iter()
+        .filter(|rule| rule.privilege == Privilege::Root)
+        .map(|rule| rule.id.to_string())
+        .collect()
+}
+
+/// Hands the root-owned half to the elevated child and folds its answer in.
+///
+/// Separate from `run` so a test can drive the boundary with a fake elevator:
+/// the real one would ask for a password, and the interesting assertion — that
+/// the request names only root items and that the reply reaches the log — does
+/// not need one.
+fn apply_root(
+    root_plan: &Plan,
+    privileged_rules: &BTreeSet<String>,
+    session: &str,
+    elevator: &dyn Elevator,
+    oplog: Option<&mut Oplog>,
+) -> io::Result<FunnelReport> {
+    let request = privilege::request_from(
+        root_plan,
+        |rule| privileged_rules.contains(rule),
+        "clean",
+        session,
+    )
+    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no privileged items"))?;
+    let reply = elevator.run(&request)?;
+    log_reply(oplog, &reply);
+    Ok(FunnelReport::of_reply(&reply))
 }
 
 /// Prints the report and returns the exit code the command settled on.
@@ -319,6 +585,122 @@ enum Consent {
     Granted,
     /// Refusal text, phrased so the user knows nothing happened and what to do.
     Declined(String),
+}
+
+/// What the user said about using root for the root-owned part of the plan.
+enum Elevation {
+    Granted,
+    Declined(String),
+}
+
+/// Asks for elevation, and declines when there is nobody to ask.
+///
+/// This is a second question on purpose: `--yes` answers "delete this plan", not
+/// "become root". A script that wants the system half says `--privileged`, and a
+/// run whose stdin is not a terminal declines rather than reaching for sudo on
+/// its own.
+fn elevate_consent(items: usize, bytes: u64, allowed: bool) -> Elevation {
+    if allowed {
+        return Elevation::Granted;
+    }
+    if !io::stdin().is_terminal() {
+        // The count is added by the caller, which is the only place that knows
+        // both halves; repeating it here produced a sentence that said the same
+        // thing twice.
+        return Elevation::Declined(
+            "stdin is not a terminal, so nobody could be asked; re-run with --privileged to \
+             sweep the system section (nothing outside $HOME was touched)"
+                .to_string(),
+        );
+    }
+
+    eprint!(
+        "sweep clean: {items} of these items ({}) are root-owned.\n\
+         Elevate with run0/sudo to remove them? [y/N] ",
+        human_bytes(bytes)
+    );
+    let _ = io::stderr().flush();
+
+    let mut answer = String::new();
+    match io::stdin().read_line(&mut answer) {
+        Ok(0) => {
+            Elevation::Declined("no answer on stdin; the system section was left alone".into())
+        }
+        Ok(_) => {
+            let answer = answer.trim().to_ascii_lowercase();
+            if answer == "y" || answer == "yes" {
+                Elevation::Granted
+            } else {
+                Elevation::Declined(
+                    "the system section was left alone; run with --privileged to include it"
+                        .to_string(),
+                )
+            }
+        }
+        Err(error) => Elevation::Declined(format!(
+            "cannot read the confirmation ({error}); the system section was left alone"
+        )),
+    }
+}
+
+/// Writes one `SKIPPED` row per item that was never attempted.
+fn skip_unattempted(oplog: Option<&mut Oplog>, plan: &Plan, code: &str) {
+    let Some(log) = oplog else {
+        return;
+    };
+    let ts = rfc3339(now_unix());
+    let session = log.session().to_string();
+    for item in plan.items() {
+        let (path, path_hex) = encode_path(item.literal());
+        log.append(Record {
+            ts: ts.clone(),
+            cmd: "clean",
+            session: &session,
+            action: Action::Skipped,
+            rule: item.rule().as_str(),
+            path,
+            path_hex,
+            bytes: 0,
+            reason: Some(code),
+            detail: Some(
+                "root-owned and not elevated; nothing was attempted as the user".to_string(),
+            ),
+        });
+    }
+}
+
+/// Appends the elevated child's report to the user's log.
+///
+/// The child never writes the log itself: root opening a file inside the user's
+/// state directory is a worse arrangement than trusting this binary's own output
+/// on a pipe, which is what it is.
+fn log_reply(oplog: Option<&mut Oplog>, reply: &privilege::Reply) {
+    let Some(log) = oplog else {
+        return;
+    };
+    let ts = rfc3339(now_unix());
+    let session = log.session().to_string();
+    for result in &reply.results {
+        let (path, path_hex) = match privilege::decode_path(&result.path_hex) {
+            Some(exact) => encode_path(&exact),
+            // A reply we cannot decode is not silently mis-filed: the display
+            // path and the hex both come from the same child, so this only
+            // happens if the child is not this binary.
+            None => (result.path.clone(), Some(result.path_hex.clone())),
+        };
+        log.append(Record {
+            ts: ts.clone(),
+            cmd: "clean",
+            session: &session,
+            action: result.action,
+            rule: &result.rule,
+            path,
+            path_hex,
+            bytes: result.bytes,
+            reason: result.code.as_deref(),
+            detail: result.detail.clone(),
+        });
+    }
 }
 
 /// Asks before deleting, and refuses when there is nobody to ask.
@@ -391,7 +773,7 @@ fn build(
     let deleting: Vec<&Rule> = selected
         .iter()
         .copied()
-        .filter(|rule| rule.enabled && rule.privilege == Privilege::User && rule.kind.deletes())
+        .filter(|rule| rule.enabled && rule.kind.deletes())
         .collect();
     let allowed: Vec<AllowedRoot> = deleting
         .iter()
@@ -400,6 +782,11 @@ fn build(
                 AllowedRoot::new(rule.expanded_root(xdg)).pinned_to_current_device(mounts);
             // A tool cache owns its directory: the sweep removes the root too.
             root.allow_root_itself = rule.kind == Kind::ToolCache;
+            // A system rule only ever removes files owned by root, whoever is
+            // asking. The elevated child re-applies the same expectation.
+            if rule.privilege == Privilege::Root {
+                root = root.owned_by_root();
+            }
             root
         })
         .collect();
@@ -438,14 +825,10 @@ fn build(
         .iter()
         .filter(|run| run.status == Status::DeclaredDisabled)
         .count();
-    let needs_root = runs
-        .iter()
-        .filter(|run| run.status == Status::NeedsRoot)
-        .count();
-    if declared_off > 0 || needs_root > 0 {
+    if declared_off > 0 {
         notes.push(format!(
-            "{declared_off} rules are declared disabled by the catalog and {needs_root} need \
-             privilege (M4); both groups are listed but never planned"
+            "{declared_off} rules are declared disabled by the catalog and are listed but \
+             never planned"
         ));
     }
     let absent = runs
@@ -487,6 +870,29 @@ fn build(
              partial scan is planned: {}",
             incomplete.len(),
             incomplete.join(", ")
+        ));
+    }
+    let root_ids = privileged_rule_ids(set);
+    let unreadable: Vec<&str> = runs
+        .iter()
+        .filter(|run| run.status == Status::Unreadable && root_ids.contains(&run.id))
+        .map(|run| run.id.as_str())
+        .collect();
+    if !unreadable.is_empty() {
+        // This is not a broken path; it is a root cache the user cannot see.
+        // Saying so once is the difference between "sweep found nothing" and
+        // "sweep could not look".
+        notes.push(format!(
+            "{} {} could not be read as your user and {} not planned: {}. A plan you cannot \
+             see is not one you can confirm",
+            unreadable.len(),
+            if unreadable.len() == 1 {
+                "root cache"
+            } else {
+                "root caches"
+            },
+            if unreadable.len() == 1 { "was" } else { "were" },
+            unreadable.join(", ")
         ));
     }
     for run in &runs {
@@ -554,6 +960,7 @@ fn build(
             rules: runs,
             refusals,
             funnel: FunnelReport::default(),
+            elevation: None,
             log: None,
             totals,
             notes,
@@ -583,9 +990,6 @@ fn skip_reason(rule: &Rule, xdg: &Xdg, only: &[Section]) -> Option<Status> {
     if rule.section.is_opt_in() && !only.contains(&rule.section) {
         return Some(Status::OptIn);
     }
-    if rule.privilege == Privilege::Root {
-        return Some(Status::NeedsRoot);
-    }
     if rule.missing_requirement(xdg).is_some() {
         return Some(Status::MissingRequirement);
     }
@@ -603,6 +1007,24 @@ fn skip_detail(rule: &Rule, xdg: &Xdg, status: Status) -> Option<String> {
         )),
         _ => None,
     }
+}
+
+/// Names the one unreadable case a user can act on.
+///
+/// A root cache with 0700 permissions exists but is invisible to the user
+/// process, and planning happens before any password is typed. The alternative
+/// would be to let the child choose the items for the plan the user confirms;
+/// until that lands, the honest answer is one line saying what could not be
+/// looked at.
+fn unreadable_detail(rule: &Rule) -> Option<String> {
+    if rule.privilege != Privilege::Root {
+        return None;
+    }
+    Some(
+        "not readable as your user (root-only directory), so it was not planned; \
+         a cache you cannot see is not a plan you can confirm"
+            .to_string(),
+    )
 }
 
 fn base_run(rule: &Rule, status: Status, detail: Option<String>) -> RuleRun {
@@ -665,6 +1087,7 @@ fn execute(
     }
     if collected.root_unreadable {
         run.status = Status::Unreadable;
+        run.detail = unreadable_detail(rule);
         return run;
     }
     if collected.stop != Stop::Complete {
@@ -766,6 +1189,7 @@ fn execute_hf(
     }
     if found.root_unreadable {
         run.status = Status::Unreadable;
+        run.detail = unreadable_detail(rule);
         return run;
     }
     if found.stop != Stop::Complete {
@@ -1541,5 +1965,159 @@ privilege = "user"
         );
         // Absolute paths are not passed in, and the root marker is not a name.
         assert_eq!(first_component(Path::new("/a")), None);
+    }
+
+    // ------------------------------------------------------- privilege boundary ---
+
+    /// An elevator that answers from a canned reply and records what it was
+    /// asked, so a test can assert on the request without a password.
+    struct FakeElevator {
+        reply: privilege::Reply,
+        seen: std::cell::RefCell<Option<privilege::Request>>,
+    }
+
+    impl FakeElevator {
+        fn answering(reply: privilege::Reply) -> Self {
+            Self {
+                reply,
+                seen: std::cell::RefCell::new(None),
+            }
+        }
+    }
+
+    impl Elevator for FakeElevator {
+        fn run(&self, request: &privilege::Request) -> io::Result<privilege::Reply> {
+            *self.seen.borrow_mut() = Some(request.clone());
+            Ok(self.reply.clone())
+        }
+    }
+
+    /// The operation log as parsed rows. The CLI tests have their own copy; this
+    /// one exists because a unit test has no access to that file.
+    fn log_rows(state: &Path) -> Vec<serde_json::Value> {
+        let path = state.join("operations.jsonl");
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        raw.lines()
+            .map(|line| serde_json::from_str(line).expect("one JSON record per line"))
+            .collect()
+    }
+
+    fn reply_row(rule: &str, path: &Path, action: Action, bytes: u64) -> privilege::ItemResult {
+        privilege::ItemResult {
+            rule: rule.to_string(),
+            path: path.display().to_string(),
+            path_hex: privilege::hex(path.as_os_str().as_encoded_bytes()),
+            action,
+            bytes,
+            code: match action {
+                Action::Skipped => Some("race_changed".to_string()),
+                _ => None,
+            },
+            detail: None,
+        }
+    }
+
+    #[test]
+    fn the_childs_reply_is_what_the_users_log_records() {
+        // The elevated child never opens a file in the user's state directory;
+        // it prints JSON lines and this process appends them. If that handoff
+        // dropped rows, the audit trail would end at the password prompt.
+        let home = tree(&[]);
+        let state = home.path().join(".local/state/sweep");
+        let mut log = Oplog::open(&state, "clean-42").expect("oplog");
+        let reply = privilege::Reply {
+            results: vec![
+                reply_row(
+                    "system.man.cache",
+                    Path::new("/var/cache/man/index.db"),
+                    Action::Removed,
+                    4096,
+                ),
+                reply_row(
+                    "system.fontconfig.cache",
+                    Path::new("/var/cache/fontconfig/x"),
+                    Action::Skipped,
+                    0,
+                ),
+            ],
+        };
+
+        log_reply(Some(&mut log), &reply);
+        drop(log);
+
+        let rows = log_rows(&state);
+        assert_eq!(rows.len(), 2, "one row per item: {rows:?}");
+        assert_eq!(rows[0]["action"], "REMOVED");
+        assert_eq!(rows[0]["rule"], "system.man.cache");
+        assert_eq!(rows[0]["bytes"], 4096);
+        assert_eq!(rows[0]["session"], "clean-42");
+        assert_eq!(rows[1]["action"], "SKIPPED");
+        assert_eq!(rows[1]["reason"], "race_changed");
+    }
+
+    #[test]
+    fn a_plan_of_user_items_never_becomes_an_elevation_request() {
+        // The boundary is decided by the rule's privilege, not by the caller's
+        // wish: a plan that contains nothing root-owned must not start a
+        // privileged process at all.
+        let temp = tree(&[("cache/old.bin", "bytes")]);
+        age(&temp.path().join("cache/old.bin"), 200);
+        let xdg = xdg_at(temp.path());
+        let body = single_rule("test.user", "dir-sweep", &temp.path().join("cache"), 0);
+        let set =
+            RuleSet::from_sources(&[sweep_core::rules::Source::new("test.toml", &body)], &xdg)
+                .expect("pack loads");
+        let mounts = MountTable::load().expect("mounts");
+        let probe = RealProbe::new().expect("probe").with_open_scan();
+        let Built { plan, .. } = build(
+            &set,
+            &xdg,
+            &probe,
+            &mounts,
+            &[],
+            &Limits::default(),
+            Mode::Apply,
+        );
+        assert!(!plan.is_empty(), "the fixture must plan one file");
+
+        let elevator = FakeElevator::answering(privilege::Reply::default());
+        let error = apply_root(
+            &plan,
+            &privileged_rule_ids(&set),
+            "clean-1",
+            &elevator,
+            None,
+        )
+        .expect_err("a user plan is not an elevation request");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(
+            elevator.seen.borrow().is_none(),
+            "the elevator must not run for an empty request"
+        );
+    }
+
+    #[test]
+    fn the_privileged_ids_are_the_enabled_system_rules_only() {
+        let temp = tree(&[]);
+        let xdg = xdg_at(temp.path());
+        let set = RuleSet::load_builtin(&xdg).expect("catalog");
+        let ids = privileged_rule_ids(&set);
+        assert!(!ids.is_empty(), "M4a enables the safe system caches");
+        for rule in set.rules() {
+            assert_eq!(
+                ids.contains(rule.id.as_str()),
+                rule.privilege == Privilege::Root,
+                "{} is classified wrongly",
+                rule.id
+            );
+        }
+    }
+
+    #[test]
+    fn a_privileged_run_without_the_flag_is_never_granted_consent() {
+        // `--privileged` is the one path that does not consult stdin. Every
+        // other path must ask, which is the behaviour a pipe cannot fake.
+        assert!(matches!(elevate_consent(3, 4096, true), Elevation::Granted));
     }
 }

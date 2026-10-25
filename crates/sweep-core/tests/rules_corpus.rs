@@ -81,18 +81,44 @@ fn no_deleting_rule_resolves_into_a_protected_root() {
 }
 
 #[test]
-fn nothing_enabled_needs_privilege_this_build_does_not_have() {
-    // The privilege boundary and `paccache` semantics arrive in M4. Until then a
-    // root rule must stay switched off, or a `clean` would report a screen of
-    // `foreign_owner` refusals instead of a preview.
+fn every_enabled_root_rule_is_one_the_elevated_child_will_accept() {
+    // A root rule is only reachable through `sweep __apply`, which re-derives
+    // its allowlist from this same catalog. An enabled rule that is missing
+    // from that list is worse than a disabled one: the parent plans items, the
+    // child refuses every one of them, and the run reports a preview it can
+    // never apply.
+    let xdg = xdg();
+    let ids = sweep_core::privilege::system_rule_ids();
+    let roots: Vec<std::path::PathBuf> = sweep_core::privilege::system_roots()
+        .into_iter()
+        .map(|root| root.path)
+        .collect();
+
     for rule in catalog().rules() {
-        if rule.privilege == Privilege::Root && rule.kind.deletes() {
-            assert!(
-                !rule.enabled,
-                "{} needs root and must stay disabled until M4",
-                rule.id
-            );
+        if rule.privilege != Privilege::Root || !rule.kind.deletes() {
+            continue;
         }
+        assert_eq!(
+            rule.section,
+            Section::System,
+            "{}: only the system section may delete as root",
+            rule.id
+        );
+        if !rule.enabled {
+            continue;
+        }
+        assert!(
+            ids.contains(rule.id.as_str()),
+            "{} is enabled but the elevated child will refuse it",
+            rule.id
+        );
+        let root = rule.expanded_root(&xdg);
+        assert!(
+            roots.contains(&root),
+            "{} is enabled but {} is not on the child's allowlist",
+            rule.id,
+            root.display()
+        );
     }
 }
 
@@ -262,7 +288,7 @@ fn the_catalog_digest_is_unchanged() {
 
     // Update this value in the same commit as the rule change, so the review
     // diff shows the catalog moved on purpose.
-    const EXPECTED: u64 = 0x4e2c_0a74_b537_c7bf;
+    const EXPECTED: u64 = 0x4838_30f4_4944_01b4;
     assert_eq!(
         format!("{hash:016x}"),
         format!("{EXPECTED:016x}"),
