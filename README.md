@@ -19,16 +19,18 @@
 
 ## Status
 
-> **Pre-alpha.** One command exists, `doctor`, and it is read-only. There is no
-> `clean` yet, so **sweep cannot delete anything.** The safety kernel underneath
-> it is finished and tested; the rules that would use it are the next milestone.
+> **Pre-alpha.** `doctor`, `rules` and `clean --dry-run` work. `clean` refuses
+> to run without `--dry-run`, so **sweep still cannot delete anything.** What
+> M2 proves is the other half: 106 rules across fifteen sections compile,
+> produce a plan, and pass that plan through the same validation the real run
+> will use.
 
 | Milestone | Scope | State |
 |---|---|---|
 | M0 | workspace, CI, `doctor` | done |
 | M1 | path policy, plan, deletion funnel, operation log, filesystem facts | done |
-| M2 | TOML rule engine, `clean --dry-run` | next |
-| M3 | user caches, dev tools, browsers, app caches, model caches | planned |
+| M2 | TOML rule engine, `rules list\|verify`, `clean --dry-run` | done |
+| M3 | applying the plan: user caches, dev tools, browsers, app caches, model caches | next |
 | M4 | system section, privilege boundary | planned |
 | M5 | `purge`, `installer`, large files, `aur` | planned |
 | M6 | TUI: `analyze`, `status` | planned |
@@ -96,6 +98,38 @@ through a directory handle opened with `RESOLVE_NO_SYMLINKS`.
 The full contract — including the six residual risks that are *not* solved — is
 in [`docs/SAFETY.md`](docs/SAFETY.md).
 
+## The rules
+
+The catalog is TOML, and it is data rather than code: `rules/01-system.toml`
+through `rules/15-project-artifacts.toml`, 106 rules over fifteen sections, 81
+enabled in this build. Each rule names a root, a kind, a retention and the
+sentence that justifies deleting there.
+
+```bash
+$ sweep rules list
+sweep rules — 15 packs, 106 rules, 81 enabled
+
+  section            rules  enabled
+  system                 8        0
+  user-essentials        5        5
+  ...
+  dev-tools             30       28
+
+  dev-tools
+    dev.cargo.crate-cache          file-pattern   30d  on    /home/u/.cargo/registry/cache
+    dev.go.build-cache             tool-cache     now  on    /home/u/.cache/go-build
+    dev.huggingface.cache          report-only    90d  off   /home/u/.cache/huggingface/hub
+```
+
+Five kinds (`dir-sweep`, `dir-age`, `file-pattern`, `tool-cache`,
+`report-only`) cover every target. `dir-age` keeps a whole subtree unless
+*every* entry in it is idle past the cutoff and nothing in it was left alone.
+
+Rules that are wrong do not load: a root inside `/usr`, a duplicate id, a typo
+in a key. A user overlay at `~/.config/sweep/rules.d/*.toml` may add rules but
+not replace a built-in one. The schema, the retention semantics and the full
+list of load-time refusals are in [`docs/RULES.md`](docs/RULES.md).
+
 ## Requirements
 
 - Arch Linux, or another Linux with `/proc/self/mountinfo`
@@ -123,14 +157,21 @@ cargo build --release
 | Command | Purpose | State |
 |---|---|---|
 | `sweep doctor` | what sweep can see: mounts, base directories, capabilities; `--json` for scripts | works |
-| `sweep clean` | reclaim cache, log and build space | M2 |
+| `sweep rules list` / `verify` | the catalog, and whether built-ins plus your overlay compile | works |
+| `sweep clean --dry-run` | the plan, per section and per rule, with the reason every skip happened | works |
+| `sweep clean` | reclaim cache, log and build space | M3 |
 | `sweep purge` / `installer` | project artifacts, installer leftovers | M5 |
 | `sweep analyze` / `status` | disk explorer, health summary | M6 |
 | `sweep uninstall` / `optimize` / `history` | package removal, maintenance, past actions | M7 |
 | `sweep aur` | AUR package cleanup | M5 |
 
+`sweep clean` without `--dry-run` exits 4 and says which milestone it is
+waiting for. That is a refusal, not a preview: reporting success while doing
+something else is the failure mode worth avoiding.
+
 `sweep doctor` is also the answer to "why did it skip everything?", so a bug
-report can be its output pasted whole.
+report can be its output pasted whole. `sweep rules list --verbose` answers the
+narrower version: which rule, which requirement, which retention.
 
 ## Development
 
@@ -140,6 +181,7 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --all --check
 cargo deny check                                    # advisories, licences, bans
 cargo +nightly fuzz run fuzz_validate -- -max_total_time=600
+cargo +nightly fuzz run fuzz_rule_toml -- -max_total_time=600
 ```
 
 All of it runs in CI, on both ext4 and a real btrfs loop filesystem — a clean
@@ -149,10 +191,14 @@ exists precisely for that difference.
 | Path | Contents |
 |---|---|
 | `crates/sweep-core` | safety kernel: policy, validation, plan, funnel, log, syscall wrappers |
+| `crates/sweep-core/src/rules` | TOML schema, load-time validation, glob, templates |
+| `crates/sweep-core/src/scan.rs` | the read-only walker every rule goes through |
 | `crates/sweep-cli` | argument parsing and output; no policy |
 | `crates/sweep-testkit` | filesystem doubles for shapes a test process cannot create |
+| `rules/` | the shipped catalog, one pack per section |
 | `fuzz/` | libFuzzer targets (nightly) |
 | `docs/SAFETY.md` | the safety contract |
+| `docs/RULES.md` | the rule schema, kinds and load-time refusals |
 
 `unsafe` is denied crate-wide except in `sweep-core/src/sys`, where each block
 carries a `// SAFETY:` justification and wraps one syscall.
