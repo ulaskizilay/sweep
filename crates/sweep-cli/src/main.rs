@@ -5,11 +5,14 @@
 
 #![deny(unsafe_code)]
 
+mod clean;
 mod doctor;
+mod rules;
 
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use sweep_core::rules::Section;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -38,7 +41,38 @@ struct Cli {
 enum Command {
     /// Report what sweep can see: mounts, base directories, capabilities.
     Doctor,
+
+    /// Inspect the rule catalog: `list` shows it, `verify` compiles it.
+    Rules {
+        #[command(subcommand)]
+        command: RulesCommand,
+    },
+
+    /// Preview what could be reclaimed. This build is read-only.
+    Clean {
+        /// Show the plan without writing anything. Required in M2.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Restrict the run to one or more sections (`--only dev-tools`).
+        #[arg(long, value_name = "SECTION")]
+        only: Vec<Section>,
+    },
 }
+
+#[derive(Debug, Subcommand)]
+enum RulesCommand {
+    /// Every rule, its section, its retention and the root it resolves to.
+    List,
+    /// Compile the built-in packs and the user overlay, and report every error.
+    Verify,
+}
+
+/// Exit code for a command that exists but is not implemented in this build.
+pub(crate) const EXIT_NOT_IMPLEMENTED: u8 = 4;
+
+/// Exit code for a rule catalog that failed to load.
+pub(crate) const EXIT_INVALID_RULES: u8 = 3;
 
 /// Exit code for a refusal that is about the environment, not the command line.
 ///
@@ -60,6 +94,11 @@ fn main() -> ExitCode {
 
     match cli.command {
         Command::Doctor => doctor::run(cli.json),
+        Command::Rules { command } => match command {
+            RulesCommand::List => rules::list(cli.json, cli.verbose),
+            RulesCommand::Verify => rules::verify(cli.json, cli.verbose),
+        },
+        Command::Clean { dry_run, only } => clean::run(cli.json, cli.verbose, &only, dry_run),
     }
 }
 
