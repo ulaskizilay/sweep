@@ -201,14 +201,14 @@ impl<'a> Spec<'a> {
     }
 }
 
-struct Budget<'a> {
+pub(crate) struct Budget<'a> {
     limits: &'a Limits,
     charged: usize,
     started: Instant,
 }
 
 impl<'a> Budget<'a> {
-    fn new(limits: &'a Limits) -> Self {
+    pub(crate) fn new(limits: &'a Limits) -> Self {
         Self {
             limits,
             charged: 0,
@@ -216,7 +216,7 @@ impl<'a> Budget<'a> {
         }
     }
 
-    fn charge(&mut self) -> Result<(), Stop> {
+    pub(crate) fn charge(&mut self) -> Result<(), Stop> {
         if self.charged >= self.limits.max_entries {
             return Err(Stop::EntryBudget);
         }

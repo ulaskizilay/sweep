@@ -28,6 +28,7 @@
 pub mod fs_facts;
 pub mod funnel;
 pub mod meta;
+pub mod model_cache;
 pub mod oplog;
 pub mod paths;
 pub mod plan;
