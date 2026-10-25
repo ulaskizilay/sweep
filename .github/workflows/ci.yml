@@ -41,6 +41,18 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
 
+  # The plan gates M0 on "cargo deny temiz", so the check lives in CI rather
+  # than in a README line nobody runs.
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo deny check
+
   # The full suite must run as an ordinary user: the kernel refuses to run as
   # root by design, and `gather_reports_the_real_machine` asserts it. Running
   # these as root would make that assertion meaningless.

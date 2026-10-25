@@ -1,0 +1,53 @@
+# cargo-deny policy.
+#
+# Run with `cargo deny check` (needs `cargo install cargo-deny`) or through the
+# `deny` CI job. The plan gates M0 on this being clean, so it is a real check
+# rather than a file that exists to be ignored.
+
+[graph]
+# The workspace excludes `fuzz` because it needs nightly; deny follows the same
+# graph so it does not resolve a package set the stable build never sees.
+targets = [
+  { triple = "x86_64-unknown-linux-gnu" },
+]
+
+[advisories]
+version = 2
+# A vulnerable dependency in a tool that deletes files is not a warning.
+# `db-urls` stays at the default (the RustSec advisory database).
+yanked = "deny"
+
+[licenses]
+version = 2
+# Permissive licences only. A copyleft dependency would force the whole binary
+# under the same terms, which is not the intent for a CLI distributed as a
+# package.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Unicode-3.0",
+]
+# The crates we author are licensed in the workspace manifest; nothing here
+# needs a per-crate exception yet. Add one only with the reason written down,
+# because "it was in the build" is how a licence problem ships.
+exceptions = []
+
+[bans]
+multiple-versions = "warn"
+# A duplicate that is a safety-relevant crate at two versions is worth a look,
+# not a build failure: `libc` and `serde` routinely appear twice through the
+# test-only dependency tree.
+wildcards = "deny"
+# Workspace-internal `path` dependencies carry no version, so they are reported
+# as wildcards. That is correct for a crate that is never published separately
+# and wrong for anything from a registry, which is what the check is for.
+allow-wildcard-paths = true
+deny = [
+  # Two parsers for the same format in one process is how a rule file gets read
+  # differently by two code paths.
+  { name = "openssl" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

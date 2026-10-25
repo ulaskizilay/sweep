@@ -231,9 +231,13 @@ prove a snapshot is inactive, so the whole family is refused rather than guessed
 about.
 
 **Why freed ≠ reclaimed.** On CoW filesystems the bytes accounted for by
-`st_blocks` may be shared with snapshots or reflinks. The summary reports
-`statvfs` delta separately from summed `st_blocks`. Presenting one number as the
-other is a lie the user cannot check.
+`st_blocks` may be shared with snapshots or reflinks, so deleting a file can
+free nothing while `st_blocks` still reports a size. The primitives for telling
+the two apart exist — `statvfs_space` for the real delta and
+`Meta::accounted_bytes` for the per-item claim — but **no report consumes them
+yet**: the summary that would print both numbers arrives with the first cleanup
+section in M3. Until then sweep reports no space figures at all, which is the
+only honest option available.
 
 **Unknown paths fail closed.** `MountTable::find` matching nothing yields
 `unknown_mount`. This happens with a truncated `mountinfo` or a path outside
@@ -243,10 +247,12 @@ every visible mount, and neither is a reason to proceed.
 
 ## 10. Verification and logging
 
-* **`--dry-run` performs no mutating syscall**, and the report carries the same
-  `plan_hash` the real run would. `dry_run_parity_on_a_real_tree` builds a plan
-  in two different insertion orders, asserts one hash, previews, then applies and
-  checks the removed set matches.
+* **The funnel's dry-run mode performs no mutating syscall** (`Mode::DryRun`),
+  and a plan's `plan_hash` is identical in both modes.
+  `dry_run_parity_on_a_real_tree` builds a plan in two different insertion
+  orders, asserts one hash, previews, then applies and checks the removed set
+  matches. The `--dry-run` *flag* does not exist yet: no command deletes
+  anything, so there is nothing for it to preview. It lands with `clean` in M2.
 * **The operation log is append-only JSONL**, one record per line, written with a
   single `write_all`. JSON gives exact fidelity: a path containing a newline is
   stored as `\n` and cannot forge a second record. `0x7f` is escaped explicitly
@@ -340,9 +346,10 @@ what was reclaimed. This is an accounting gap, not a deletion risk.
 
 ### R6. CoW reflinks
 
-Summed `st_blocks` over-counts shared extents on btrfs/XFS-reflink. The summary
-separates the `statvfs` delta for this reason, but per-rule numbers can still
-look larger than they are.
+Summed `st_blocks` over-counts shared extents on btrfs/XFS-reflink. The plan is
+to print the `statvfs` delta alongside it rather than instead of it; until that
+summary exists (M3), sweep reports no space figures, so nothing is over-stated
+and nothing is claimed.
 
 ---
 

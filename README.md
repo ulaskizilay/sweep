@@ -4,6 +4,11 @@ Terminal cleanup and maintenance for Arch Linux. Reclaims cache, log and build
 space through a single validated deletion path: every action is previewable,
 logged, and refuses to touch package-owned or read-only paths.
 
+> **Pre-alpha.** One command exists (`doctor`), and it is read-only. There is no
+> `clean` yet, so **sweep cannot delete anything**. The safety kernel underneath
+> it is finished and tested; the rules that would use it are the next milestone.
+> Do not treat the command table below as a list of what works today.
+
 ```
 $ sweep doctor
 sweep 0.1.0
@@ -87,8 +92,12 @@ Planned: `clean`, `purge`, `installer`, `uninstall`, `analyze`, `status`,
 cargo test --workspace                              # unit, property, corpus
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all --check
+cargo deny check                                    # advisories, licences, bans
 cargo +nightly fuzz run fuzz_validate -- -max_total_time=600
 ```
+
+Every one of those runs in CI, on ext4-on-a-container and on a real btrfs loop
+filesystem.
 
 Layout:
 
@@ -116,4 +125,5 @@ carries a `// SAFETY:` justification and wraps one syscall.
 
 ## License
 
-MIT.
+MIT — see [LICENSE](LICENSE). The `Copyright (c)` line still carries a
+placeholder and must be filled in before the repository is published.
