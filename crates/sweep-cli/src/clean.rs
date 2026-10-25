@@ -31,6 +31,7 @@ use std::process::ExitCode;
 
 use serde::Serialize;
 use sweep_core::fs_facts::MountTable;
+use sweep_core::model_cache::{self, Leftover};
 use sweep_core::oplog::Oplog;
 use sweep_core::paths::is_within;
 use sweep_core::probe::RealProbe;
@@ -47,9 +48,12 @@ enum Status {
     ReportOnly,
     DeclaredDisabled,
     NeedsRoot,
+    /// A section that is only swept when the user names it (`--only`).
+    OptIn,
     MissingRequirement,
     NotPresent,
     NotADirectory,
+    SymlinkedRoot,
     Unreadable,
     ScanIncomplete,
     Empty,
@@ -66,9 +70,11 @@ impl Status {
             Status::ReportOnly => "report-only",
             Status::DeclaredDisabled => "disabled by the catalog",
             Status::NeedsRoot => "needs root; arrives in M4",
+            Status::OptIn => "opt-in section, not selected",
             Status::MissingRequirement => "tool not installed",
             Status::NotPresent => "path not present",
             Status::NotADirectory => "not a directory",
+            Status::SymlinkedRoot => "rule root is a symlink",
             Status::Unreadable => "permission denied",
             Status::ScanIncomplete => "scan incomplete; nothing planned",
             Status::Empty => "nothing to remove",
@@ -90,6 +96,9 @@ struct RuleRun {
     bytes: u64,
     /// Bytes visited, including entries that were not planned.
     scanned_bytes: u64,
+    /// Repositories a scanner refused to judge because part of the tree was
+    /// unreadable. Empty for every kind but `hf-cache`.
+    preserved: Vec<String>,
     detail: Option<String>,
 }
 
@@ -415,7 +424,7 @@ fn build(
 
     for rule in &selected {
         let root = rule.expanded_root(xdg);
-        match skip_reason(rule, xdg) {
+        match skip_reason(rule, xdg, only) {
             Some(status) => runs.push(base_run(rule, status, skip_detail(rule, xdg, status))),
             None => runs.push(execute(
                 rule, &root, probe, &ctx, limits, &mut plan, &roots, now,
@@ -448,6 +457,25 @@ fn build(
             "{absent} rule roots are not present on this machine and were skipped"
         ));
     }
+    let opt_in: Vec<&str> = Section::ALL
+        .into_iter()
+        .filter(|section| section.is_opt_in())
+        .filter(|section| {
+            runs.iter()
+                .any(|run| run.status == Status::OptIn && run.section == section.as_str())
+        })
+        .map(|section| section.as_str())
+        .collect();
+    if !opt_in.is_empty() {
+        // Nothing in these sections is scanned, so the note must not imply a
+        // size: the number only exists once the user asks for that section.
+        notes.push(format!(
+            "{} {} opt-in and was not scanned; `sweep clean --only {}` reviews it",
+            opt_in.join(", "),
+            if opt_in.len() == 1 { "is" } else { "are" },
+            opt_in.join(" --only ")
+        ));
+    }
     let incomplete: Vec<&str> = runs
         .iter()
         .filter(|run| run.status == Status::ScanIncomplete)
@@ -459,6 +487,33 @@ fn build(
              partial scan is planned: {}",
             incomplete.len(),
             incomplete.join(", ")
+        ));
+    }
+    for run in &runs {
+        if run.preserved.is_empty() {
+            continue;
+        }
+        // "Kept because it could not be read" is the opposite of a skip the user
+        // can ignore, so it is stated once in the summary and not only in the
+        // per-rule detail.
+        let mut names = run.preserved.iter().take(3).cloned().collect::<Vec<_>>();
+        if run.preserved.len() > names.len() {
+            names.push(format!("and {} more", run.preserved.len() - names.len()));
+        }
+        notes.push(format!(
+            "{} {} preserved because {} snapshots could not be read completely: {}",
+            run.preserved.len(),
+            if run.preserved.len() == 1 {
+                "repository"
+            } else {
+                "repositories"
+            },
+            if run.preserved.len() == 1 {
+                "its"
+            } else {
+                "their"
+            },
+            names.join(", ")
         ));
     }
 
@@ -516,9 +571,17 @@ fn touches_copy_on_write(roots: &[PathBuf], mounts: &MountTable) -> bool {
     })
 }
 
-fn skip_reason(rule: &Rule, xdg: &Xdg) -> Option<Status> {
+/// Why a rule contributed nothing before it was scanned.
+fn skip_reason(rule: &Rule, xdg: &Xdg, only: &[Section]) -> Option<Status> {
     if !rule.enabled {
         return Some(Status::DeclaredDisabled);
+    }
+    // Model weights are the one target that may not be re-downloadable, so the
+    // section is skipped unless the user named it. The rules stay enabled: the
+    // section name *is* the consent, and there is no second switch to keep in
+    // sync with it.
+    if rule.section.is_opt_in() && !only.contains(&rule.section) {
+        return Some(Status::OptIn);
     }
     if rule.privilege == Privilege::Root {
         return Some(Status::NeedsRoot);
@@ -534,6 +597,10 @@ fn skip_detail(rule: &Rule, xdg: &Xdg, status: Status) -> Option<String> {
         Status::MissingRequirement => rule
             .missing_requirement(xdg)
             .map(|requirement| format!("requires {}", requirement.label())),
+        Status::OptIn => Some(format!(
+            "run `sweep clean --only {}` to review it",
+            rule.section.as_str()
+        )),
         _ => None,
     }
 }
@@ -548,6 +615,7 @@ fn base_run(rule: &Rule, status: Status, detail: Option<String>) -> RuleRun {
         refused: 0,
         bytes: 0,
         scanned_bytes: 0,
+        preserved: Vec::new(),
         detail,
     }
 }
@@ -563,6 +631,10 @@ fn execute(
     all_roots: &[PathBuf],
     now: i64,
 ) -> RuleRun {
+    if rule.kind == Kind::HfCache {
+        return execute_hf(rule, root, probe, ctx, limits, plan, now);
+    }
+
     // Roots another enabled rule owns: the residual cache sweep must not take a
     // target that has a retention policy of its own.
     let claimed: Vec<PathBuf> = all_roots
@@ -641,13 +713,120 @@ fn execute(
             paths
         }
         Kind::DirAge => age_candidates(rule, &collected, root, now, &mut run),
+        Kind::HfCache => unreachable!("handled before the walk"),
     };
     // Children first is the plan's job (`Plan::finish` sorts deepest-first); the
     // walk already emits post-order, so this stays readable even before sorting.
     candidates.sort();
 
+    plan_candidates(plan, ctx, rule, &mut run, candidates);
+
+    if run.items == 0 && run.refused == 0 {
+        run.status = Status::Empty;
+        if run.detail.is_none() {
+            run.detail = blocked_detail(&collected);
+        }
+    }
+    run
+}
+
+/// The Hugging Face hub: the one kind whose candidates come from its own reader.
+///
+/// The generic walker refuses to follow symlinks, and every file in a hub
+/// snapshot *is* a symlink into `blobs/`. Walking it normally would either
+/// delete the blobs and leave the snapshots dangling, or plan nothing. So the
+/// scan moves to [`sweep_core::model_cache`], and this function only maps its
+/// verdicts onto the same statuses and the same plan funnel as every other rule.
+fn execute_hf(
+    rule: &Rule,
+    root: &Path,
+    probe: &RealProbe,
+    ctx: &ValidateCtx<'_>,
+    limits: &Limits,
+    plan: &mut Plan,
+    now: i64,
+) -> RuleRun {
+    let found = model_cache::scan(root, rule.keep_days, now, limits, probe);
+    let mut run = base_run(rule, Status::Planned, None);
+    run.scanned_bytes = found.bytes_visited;
+
+    if found.missing_root {
+        run.status = Status::NotPresent;
+        return run;
+    }
+    if found.root_is_symlink {
+        run.status = Status::SymlinkedRoot;
+        run.detail =
+            Some("a symlinked hub is not followed; point the rule at the real path".into());
+        return run;
+    }
+    if found.not_a_directory {
+        run.status = Status::NotADirectory;
+        return run;
+    }
+    if found.root_unreadable {
+        run.status = Status::Unreadable;
+        return run;
+    }
+    if found.stop != Stop::Complete {
+        run.status = Status::ScanIncomplete;
+        run.detail = Some(match found.stop {
+            Stop::EntryBudget => "entry budget exhausted".to_string(),
+            Stop::TimeBudget => "time budget exhausted".to_string(),
+            Stop::Complete => unreachable!("checked above"),
+        });
+        return run;
+    }
+
+    let orphans = found.candidates_of(Leftover::UnreferencedBlob);
+    let incomplete = found.candidates_of(Leftover::Incomplete);
+    let mut detail = format!(
+        "{} repositories, {} blobs still linked, {orphans} orphaned blobs, {incomplete} \
+         abandoned downloads",
+        found.repos, found.referenced
+    );
+    if !found.preserved.is_empty() {
+        let mut names = found.preserved.iter().take(3).cloned().collect::<Vec<_>>();
+        if found.preserved.len() > names.len() {
+            names.push(format!("and {} more", found.preserved.len() - names.len()));
+        }
+        detail.push_str(&format!(
+            "; {} repositories preserved because their snapshots could not be read: {}",
+            found.preserved.len(),
+            names.join(", ")
+        ));
+        // Preserved-whole is a refusal to act, so it belongs in the summary a
+        // user reads without `--verbose`, not only in the per-rule detail.
+        run.preserved = found.preserved.clone();
+    }
+    run.detail = Some(detail);
+
+    let candidates: Vec<PathBuf> = found
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.path)
+        .collect();
+    plan_candidates(plan, ctx, rule, &mut run, candidates);
+
+    if run.items == 0 && run.refused == 0 {
+        run.status = Status::Empty;
+    }
+    run
+}
+
+/// Pushes validated candidates into the plan and keeps the per-rule tally.
+fn plan_candidates<I, P>(
+    plan: &mut Plan,
+    ctx: &ValidateCtx<'_>,
+    rule: &Rule,
+    run: &mut RuleRun,
+    candidates: I,
+) where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
     for path in candidates {
-        match plan.push(path, &rule.id, ctx) {
+        match plan.push(path.as_ref(), &rule.id, ctx) {
             Ok(_) => run.items += 1,
             Err(_) => run.refused += 1,
         }
@@ -659,14 +838,6 @@ fn execute(
         .filter(|item| item.rule() == &rule.id)
         .map(|item| item.bytes())
         .sum();
-
-    if run.items == 0 && run.refused == 0 {
-        run.status = Status::Empty;
-        if run.detail.is_none() {
-            run.detail = blocked_detail(&collected);
-        }
-    }
-    run
 }
 
 /// Everything the walk enumerated, minus a directory that cannot be emptied.

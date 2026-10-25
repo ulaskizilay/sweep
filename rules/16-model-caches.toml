@@ -1,0 +1,56 @@
+# Downloaded model weights.
+#
+# This is the only section that is skipped unless it is named on the command
+# line: `sweep clean --only model-caches`. A cache miss here is not always
+# recoverable. A gated repository needs a licence acceptance, a private one
+# needs a token, and an offline machine has neither. Model weights are also the
+# largest thing sweep can reach, so a default that claims them is a default that
+# surprises people.
+#
+# Why the hub needs its own kind: `huggingface_hub` stores each file once as
+# `blobs/<etag>` and links it into `snapshots/<revision>/<path>`. Sweeping
+# `blobs/` like an ordinary cache leaves every snapshot dangling - the model
+# looks installed, fails at load time, and never re-downloads, because its
+# revision is still in `refs/`. `kind = "hf-cache"` plans only the blobs no
+# snapshot points at, plus abandoned `*.incomplete` downloads, and never follows
+# a link.
+#
+# Protected, in every rule below: `snapshots/`, `refs/`, a blob any snapshot
+# links to, and `datasets--*` / `spaces--*` trees with unreadable snapshots.
+
+[meta]
+name = "model-caches"
+description = "Downloaded model weights: Hugging Face hub, torch hub, whisper"
+
+[[rule]]
+id = "model.huggingface.hub"
+section = "model-caches"
+kind = "hf-cache"
+root = "{cache}/huggingface/hub"
+evidence = "A blob no snapshot links to is not part of any installed revision; huggingface_hub re-fetches a blob the moment a snapshot needs it."
+recoverable = true
+keep_days = 90
+requires = ["dir:{cache}/huggingface/hub"]
+privilege = "user"
+
+[[rule]]
+id = "model.torch.checkpoints"
+section = "model-caches"
+kind = "dir-age"
+root = "{cache}/torch/hub/checkpoints"
+evidence = "torch.hub keeps pretrained weights here and downloads them again when a checkpoint is missing."
+recoverable = true
+keep_days = 90
+requires = ["dir:{cache}/torch/hub/checkpoints"]
+privilege = "user"
+
+[[rule]]
+id = "model.whisper.cache"
+section = "model-caches"
+kind = "dir-age"
+root = "{cache}/whisper"
+evidence = "openai-whisper downloads its .pt weights here and re-fetches them from the model URL on the next transcription."
+recoverable = true
+keep_days = 90
+requires = ["dir:{cache}/whisper"]
+privilege = "user"

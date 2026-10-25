@@ -22,9 +22,9 @@
 > **Pre-alpha.** `doctor`, `rules` and `clean` work. `clean` prints the plan,
 > asks once, then deletes through the single funnel and writes one operation-log
 > row per decision; `--dry-run` stops before the question and writes nothing at
-> all. What M2 proved is the other half: 106 rules across fifteen sections
-> compile, produce a plan, and pass that plan through the same validation the
-> real run uses.
+> all. The catalog is 107 rules over sixteen sections, and the section whose loss
+> may not be recoverable — downloaded model weights — is skipped unless you name
+> it.
 
 | Milestone | Scope | State |
 |---|---|---|
@@ -32,8 +32,8 @@
 | M1 | path policy, plan, deletion funnel, operation log, filesystem facts | done |
 | M2 | TOML rule engine, `rules list\|verify`, `clean --dry-run` | done |
 | M3a | applying the plan: confirmation gate, operation log, exit codes | done |
-| M3b | model caches: Hugging Face blobs, torch checkpoints | next |
-| M4 | system section, privilege boundary | planned |
+| M3b | model caches: Hugging Face blob/snapshot scanner, opt-in section | done |
+| M4 | system section, privilege boundary | next |
 | M5 | `purge`, `installer`, large files, `aur` | planned |
 | M6 | TUI: `analyze`, `status` | planned |
 | M7 | `uninstall`, `optimize`, `history`, snapshot report | planned |
@@ -97,33 +97,41 @@ silently cleans nothing on a large fraction of machines. The resolved physical
 path is re-tested against the same list, deny-only, and the delete happens
 through a directory handle opened with `RESOLVE_NO_SYMLINKS`.
 
-The full contract — including the six residual risks that are *not* solved — is
-in [`docs/SAFETY.md`](docs/SAFETY.md).
+The full contract — including the seven residual risks that are *not* solved —
+is in [`docs/SAFETY.md`](docs/SAFETY.md).
 
 ## The rules
 
 The catalog is TOML, and it is data rather than code: `rules/01-system.toml`
-through `rules/15-project-artifacts.toml`, 106 rules over fifteen sections, 81
+through `rules/16-model-caches.toml`, 107 rules over sixteen sections, 84
 enabled in this build. Each rule names a root, a kind, a retention and the
 sentence that justifies deleting there.
 
 ```bash
 $ sweep rules list
-sweep rules — 15 packs, 106 rules, 81 enabled
+sweep rules — 16 packs, 107 rules, 84 enabled
 
   section            rules  enabled
   system                 8        0
   user-essentials        5        5
   ...
-  dev-tools             30       28
+  dev-tools             28       28
+  ...
+  model-caches           3        3  opt-in
+
+  model-caches is opt-in: `sweep clean` leaves it alone until you name it with `--only`.
 
   dev-tools
     dev.cargo.crate-cache          file-pattern   30d  on    /home/u/.cargo/registry/cache
     dev.go.build-cache             tool-cache     now  on    /home/u/.cache/go-build
-    dev.huggingface.cache          report-only    90d  off   /home/u/.cache/huggingface/hub
+
+  model-caches
+    model.huggingface.hub          hf-cache       90d  on    /home/u/.cache/huggingface/hub
+    model.torch.checkpoints        dir-age        90d  on    /home/u/.cache/torch/hub/checkpoints
+    model.whisper.cache            dir-age        90d  on    /home/u/.cache/whisper
 ```
 
-Five kinds (`dir-sweep`, `dir-age`, `file-pattern`, `tool-cache`,
+Six kinds (`dir-sweep`, `dir-age`, `file-pattern`, `tool-cache`, `hf-cache`,
 `report-only`) cover every target. `dir-age` keeps a whole subtree unless
 *every* entry in it is idle past the cutoff and nothing in it was left alone.
 
@@ -131,6 +139,25 @@ Rules that are wrong do not load: a root inside `/usr`, a duplicate id, a typo
 in a key. A user overlay at `~/.config/sweep/rules.d/*.toml` may add rules but
 not replace a built-in one. The schema, the retention semantics and the full
 list of load-time refusals are in [`docs/RULES.md`](docs/RULES.md).
+
+### Model weights are opt-in
+
+`model-caches` is the one section a bare run does not scan. The rules are listed
+with status `opt-in` instead of disappearing, and the summary says the section
+was not scanned rather than reporting it as empty. `--only model-caches` is the
+consent.
+
+The reason is recoverability, not caution about size. A gated repository needs a
+licence acceptance, a private one needs a token, and an offline machine can
+reach neither, so "download it again" is not always true.
+
+That section also needs its own kind. `huggingface_hub` stores each file once as
+`blobs/<etag>` and links it into `snapshots/<revision>/<path>`, so an ordinary
+cache sweep would delete the blobs and leave every snapshot dangling: the model
+looks installed, fails at load time, and never re-downloads because its revision
+is still in `refs/`. `hf-cache` therefore plans only blobs no snapshot link
+resolves to, plus abandoned `*.incomplete` downloads, and it preserves a
+repository whose snapshot tree cannot be read completely.
 
 ## Requirements
 
@@ -162,6 +189,7 @@ cargo build --release
 | `sweep rules list` / `verify` | the catalog, and whether built-ins plus your overlay compile | works |
 | `sweep clean --dry-run` | the plan, per section and per rule, with the reason every skip happened | works |
 | `sweep clean` | reclaim cache, log and build space; asks once, then deletes | works |
+| `sweep clean --only model-caches` | the opt-in section: model blobs, checkpoint caches | works |
 | `sweep purge` / `installer` | project artifacts, installer leftovers | M5 |
 | `sweep analyze` / `status` | disk explorer, health summary | M6 |
 | `sweep uninstall` / `optimize` / `history` | package removal, maintenance, past actions | M7 |

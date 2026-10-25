@@ -31,7 +31,7 @@ without compiling.
 ```toml
 [[rule]]
 id          = "dev.cargo.crate-cache"     # required, namespaced, unique
-section     = "dev-tools"               # required, one of the fifteen sections
+section     = "dev-tools"               # required, one of the sixteen sections
 kind        = "dir-age"                 # required, see below
 root        = "{cache}/cargo"           # required, absolute, template allowed
 evidence    = "Cargo re-downloads ..."  # required for deleting kinds
@@ -56,10 +56,24 @@ documentation. It has no effect on behaviour.
 
 `system`, `user-essentials`, `app-caches`, `browsers`, `cloud-office`,
 `dev-tools`, `apps`, `virtualization`, `local-data`, `orphans`, `aur`,
-`firmware`, `snapshots`, `large-files`, `project-artifacts`.
+`firmware`, `snapshots`, `large-files`, `project-artifacts`, `model-caches`.
 
 The list is closed. A new section is a product decision (it needs a row in the
 `clean` report), not something a pack can invent.
+
+### Opt-in sections
+
+`model-caches` is the only opt-in section today, and `Section::is_opt_in` is the
+single place that decides it. A bare `sweep clean` does not scan it at all: the
+rules are listed with status `OptIn` and the summary carries a note saying the
+section was not scanned and how to review it. `sweep clean --only model-caches`
+is the consent. The rules stay `enabled = true`, so naming the section is enough
+and there is no second switch to keep in sync with the first.
+
+The reason is not squeamishness about size. A model blob is the one target whose
+absence may not be recoverable: a gated repository needs a licence acceptance, a
+private one needs a token, and an offline machine can reach neither. A default
+run must not decide that for the user.
 
 ### Root templates
 
@@ -87,6 +101,7 @@ the file. `..` is refused for the same reason.
 | `dir-age` | each top-level entry whose whole subtree is older than `keep_days` | applied |
 | `file-pattern` | files below the root whose relative path matches `pattern` and are older than `keep_days` | applied |
 | `tool-cache` | every entry below the root, **and then the root** | must be 0: everything goes |
+| `hf-cache` | blobs no `snapshots/` link resolves to, plus abandoned `*.incomplete` downloads | must be > 0 |
 | `report-only` | nothing; counts entries and bytes | informational |
 
 A retention the kind cannot read is a load error (`ignored_keep_days`), not a
@@ -95,6 +110,27 @@ number printed by `rules list` that the run silently disobeys.
 `if-missing-owner` and the `pkg:` requirement prefix are recognised as valid
 spellings but refused at load: they need the package database and arrive in M5.
 Refusing them beats accepting a rule that quietly does nothing.
+
+### The `hf-cache` rule, precisely
+
+`huggingface_hub` stores every file once as `blobs/<etag>` and links it into
+`snapshots/<revision>/<path>`. Sweeping `blobs/` as an ordinary cache leaves
+every snapshot pointing at nothing: the model still looks installed, fails at
+load time, and never re-downloads, because its revision is still in `refs/`. So
+the kind has its own scanner (`crates/sweep-core/src/model_cache.rs`) and plans
+exactly two things:
+
+1. a complete blob that no symlink below `snapshots/` resolves to, once it is
+   older than `keep_days`;
+2. an `*.incomplete` download older than `keep_days`.
+
+Links are read with `read_link` and resolved lexically. Nothing is followed, so
+a snapshot entry pointing at `/etc/shadow` is a string compared against blob
+paths, never a file sweep opens. A repository whose `snapshots/` tree cannot be
+read completely is preserved whole and named in the report: an unreadable
+reference set is not an empty one, and the cost of guessing wrong is a silently
+broken model. `keep_days = 0` is refused at load (`unsafe_retention`), because
+the hub writes the blob before the link that references it.
 
 ### The `dir-age` rule, precisely
 
@@ -156,8 +192,8 @@ Every check below applies to the built-in packs and to the overlay equally.
 | `read_failed` | a file in `rules.d` could not be read |
 | `bad_id` | the id is empty, longer than 64 bytes, or has a character outside `[a-z0-9._-]` |
 | `duplicate_id` | the id already exists — including a built-in id, so the overlay cannot replace one |
-| `unknown_section` | the section is not one of the fifteen |
-| `unknown_kind` | the kind is not one of the five |
+| `unknown_section` | the section is not one of the sixteen |
+| `unknown_kind` | the kind is not one of the six |
 | `unsupported_kind` | the kind exists but is not implemented yet (`if-missing-owner`) |
 | `bad_privilege` | the value is neither `user` nor `root` |
 | `template` | the root is relative, empty, contains `..` or a control byte, mixes a variable with text, or names an unknown variable |
@@ -165,6 +201,7 @@ Every check below applies to the built-in packs and to the overlay equally.
 | `bare_root` | a deleting rule resolves to a base directory, to `/`, or to a kernel pseudo-filesystem |
 | `missing_evidence` | a deleting rule has no `evidence` line |
 | `zero_keep_days` | `keep_days = 0` without `recoverable = true` |
+| `unsafe_retention` | `kind = "hf-cache"` with `keep_days = 0`: a blob with no snapshot link may be a download that has not finished |
 | `root_privilege` | `privilege = "root"` on a deleting rule outside the `system` section |
 | `missing_pattern` | `kind = "file-pattern"` with no `pattern` |
 | `unused_pattern` | `pattern` on a kind that does not read it |
@@ -208,6 +245,7 @@ sweep rules list --json      # the same data as one document
 sweep rules verify           # compile built-ins + overlay and report every error
 sweep clean --dry-run        # the plan, with per-section and per-rule detail
 sweep clean --dry-run --only dev-tools
+sweep clean --dry-run --only model-caches   # the opt-in section, reviewed first
 sweep clean                  # plan, ask once, delete through the funnel
 sweep clean --yes            # plan and delete; the form a script can use
 ```

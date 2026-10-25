@@ -254,29 +254,11 @@ keep_days = 0
 requires = ["bin:sccache"]
 privilege = "user"
 
-# Class B: the cache is a content-addressed blob store whose `snapshots/` tree is
-# made of symlinks into `blobs/`. A plain directory sweep leaves dangling links,
-# so the model looks installed but is broken. Disabled until the symlink-aware
-# handler lands.
-[[rule]]
-id = "dev.huggingface.cache"
-section = "dev-tools"
-kind = "report-only"
-root = "{cache}/huggingface/hub"
-evidence = "Reported, never deleted: blobs back a symlink tree and some models are licence-gated."
-keep_days = 90
-privilege = "user"
-enabled = false
-
-[[rule]]
-id = "dev.torch.checkpoints"
-section = "dev-tools"
-kind = "report-only"
-root = "{cache}/torch/hub/checkpoints"
-evidence = "Reported, never deleted: a checkpoint can be hundreds of megabytes behind a gated download."
-keep_days = 90
-privilege = "user"
-enabled = false
+# Model weights are not here. `~/.cache/huggingface/hub`, `~/.cache/torch` and
+# `~/.cache/whisper` were report-only placeholders until M3b; they now live in
+# the opt-in `model-caches` section, which has a handler for the hub's
+# blob/snapshot symlink layout. Two rules on one root, with two retention
+# policies, is how a sweep ends up disagreeing with itself.
 
 [[rule]]
 id = "dev.puppeteer.cache"

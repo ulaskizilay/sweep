@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use crate::plan::RuleId;
 use crate::Xdg;
 
-/// The fifteen sections a rule may belong to.
+/// The sixteen sections a rule may belong to.
 ///
 /// The list is closed on purpose: a new section is a product decision (it needs
 /// a place in `clean`'s report), not something a rule file can invent by typing
@@ -50,10 +50,11 @@ pub enum Section {
     Snapshots,
     LargeFiles,
     ProjectArtifacts,
+    ModelCaches,
 }
 
 impl Section {
-    pub const ALL: [Section; 15] = [
+    pub const ALL: [Section; 16] = [
         Section::System,
         Section::UserEssentials,
         Section::AppCaches,
@@ -69,6 +70,7 @@ impl Section {
         Section::Snapshots,
         Section::LargeFiles,
         Section::ProjectArtifacts,
+        Section::ModelCaches,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -88,6 +90,7 @@ impl Section {
             Section::Snapshots => "snapshots",
             Section::LargeFiles => "large-files",
             Section::ProjectArtifacts => "project-artifacts",
+            Section::ModelCaches => "model-caches",
         }
     }
 
@@ -100,6 +103,18 @@ impl Section {
     /// True when the section needs privilege for every rule in it.
     pub fn is_privileged(self) -> bool {
         matches!(self, Section::System)
+    }
+
+    /// True when nothing in the section is swept unless the user names it.
+    ///
+    /// Model weights are the one target that may not be re-downloadable: a
+    /// gated repository needs a licence acceptance, a private one needs a token,
+    /// and an offline machine can reach neither. So the section is skipped in a
+    /// bare run and listed as skipped, and `--only model-caches` is the consent
+    /// that turns it on. The rules stay enabled so that naming the section is
+    /// enough; there is no separate switch to keep in sync.
+    pub fn is_opt_in(self) -> bool {
+        matches!(self, Section::ModelCaches)
     }
 }
 
@@ -138,16 +153,20 @@ pub enum Kind {
     FilePattern,
     /// Remove every entry below the root, then the root itself.
     ToolCache,
+    /// Remove what a Hugging Face hub cache has left behind: blobs no snapshot
+    /// links to, and abandoned `*.incomplete` downloads.
+    HfCache,
     /// Count and describe; never contributes a plan item.
     ReportOnly,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 5] = [
+    pub const ALL: [Kind; 6] = [
         Kind::DirSweep,
         Kind::DirAge,
         Kind::FilePattern,
         Kind::ToolCache,
+        Kind::HfCache,
         Kind::ReportOnly,
     ];
 
@@ -157,6 +176,7 @@ impl Kind {
             Kind::DirAge => "dir-age",
             Kind::FilePattern => "file-pattern",
             Kind::ToolCache => "tool-cache",
+            Kind::HfCache => "hf-cache",
             Kind::ReportOnly => "report-only",
         }
     }
@@ -169,6 +189,7 @@ impl Kind {
             "dir-age" => Kind::DirAge,
             "file-pattern" => Kind::FilePattern,
             "tool-cache" => Kind::ToolCache,
+            "hf-cache" => Kind::HfCache,
             "report-only" => Kind::ReportOnly,
             "if-missing-owner" => {
                 return Err(Some(
@@ -536,7 +557,7 @@ mod tests {
 
     #[test]
     fn every_section_round_trips_through_its_name() {
-        assert_eq!(Section::ALL.len(), 15);
+        assert_eq!(Section::ALL.len(), 16);
         for section in Section::ALL {
             assert_eq!(Section::parse(section.as_str()), Some(section));
             assert_eq!(
@@ -672,7 +693,7 @@ privilege = "user"
         let xdg = xdg();
         let set = RuleSet::from_sources(&builtin::sources(), &xdg).expect("builtins load");
         let summaries = set.sections();
-        assert_eq!(summaries.len(), 15);
+        assert_eq!(summaries.len(), 16);
         let system = summaries
             .iter()
             .find(|summary| summary.section == Section::System)
@@ -709,7 +730,7 @@ privilege = "user"
         ids.dedup();
         assert_eq!(ids.len(), before, "duplicate built-in rule id");
         let covered: BTreeSet<Section> = set.rules().iter().map(|r| r.section).collect();
-        assert_eq!(covered.len(), 15, "every section needs at least one rule");
+        assert_eq!(covered.len(), 16, "every section needs at least one rule");
     }
 
     #[test]

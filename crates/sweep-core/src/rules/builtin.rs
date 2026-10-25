@@ -72,6 +72,10 @@ pub const BUILTIN_PACKS: &[(&str, &str)] = &[
         "rules/15-project-artifacts.toml",
         include_str!("../../../../rules/15-project-artifacts.toml"),
     ),
+    (
+        "rules/16-model-caches.toml",
+        include_str!("../../../../rules/16-model-caches.toml"),
+    ),
 ];
 
 pub fn sources() -> Vec<Source> {

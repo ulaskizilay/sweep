@@ -710,6 +710,237 @@ fn clean_yes_with_nothing_to_plan_exits_zero_and_writes_no_log() {
     );
 }
 
+// ------------------------------------------------------------ model caches ---
+
+/// A hub repository laid out the way `huggingface_hub` writes one, every file
+/// old enough to be a candidate: one blob a snapshot links to, one orphan and
+/// one abandoned download.
+///
+/// Returns `(root, used, orphan, incomplete)`.
+fn hub_cache(home: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    let root = home.join(".cache/huggingface/hub/models--org--name");
+    write(
+        home,
+        ".cache/huggingface/hub/models--org--name/blobs/used",
+        "used weights",
+    );
+    write(
+        home,
+        ".cache/huggingface/hub/models--org--name/blobs/orphan",
+        "orphan weights",
+    );
+    write(
+        home,
+        ".cache/huggingface/hub/models--org--name/blobs/abc.incomplete",
+        "half a download",
+    );
+    write(
+        home,
+        ".cache/huggingface/hub/models--org--name/refs/main",
+        "deadbee",
+    );
+    std::fs::create_dir_all(root.join("snapshots/deadbee")).expect("mkdir");
+    std::os::unix::fs::symlink(
+        "../../blobs/used",
+        root.join("snapshots/deadbee/config.json"),
+    )
+    .expect("symlink");
+
+    for relative in [
+        "blobs/used",
+        "blobs/orphan",
+        "blobs/abc.incomplete",
+        "snapshots/deadbee/config.json",
+        "snapshots/deadbee",
+        "snapshots",
+    ] {
+        age(&root.join(relative), 200);
+    }
+
+    (
+        root.clone(),
+        root.join("blobs/used"),
+        root.join("blobs/orphan"),
+        root.join("blobs/abc.incomplete"),
+    )
+}
+
+/// Backdates a path's mtime. `touch -d` is not portable enough for a test that
+/// must also stamp symlinks and directories, so this uses the same syscall.
+fn age(path: &Path, days: u64) {
+    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400);
+    let file = std::fs::File::open(path).expect("open for mtime");
+    file.set_times(std::fs::FileTimes::new().set_modified(when))
+        .expect("set mtime");
+}
+
+#[test]
+fn a_bare_run_leaves_model_caches_alone_and_says_how_to_review_them() {
+    let home = home();
+    let (_, used, orphan, incomplete) = hub_cache(home.path());
+
+    let output = run_in(home.path(), &["clean", "--dry-run", "--json"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("one document");
+
+    let section = report["sections"]
+        .as_array()
+        .expect("sections")
+        .iter()
+        .find(|section| section["section"] == "model-caches")
+        .expect("model-caches is listed even when it is skipped");
+    assert_eq!(
+        section["items"], 0,
+        "an opt-in section must not be scanned in a bare run: {section}"
+    );
+
+    let rules = report["rules"].as_array().expect("rules");
+    let hub = rules
+        .iter()
+        .find(|run| run["id"] == "model.huggingface.hub")
+        .expect("the hub rule is listed");
+    assert_eq!(hub["status"], "opt_in", "{hub}");
+    assert!(
+        hub["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("--only model-caches"),
+        "the skip must say how to review the section: {hub}"
+    );
+
+    let notes = report["notes"]
+        .as_array()
+        .expect("notes")
+        .iter()
+        .filter_map(|note| note.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes.iter().any(|note| note.contains("model-caches")
+            && note.contains("not scanned")
+            && !note.contains("0 B")),
+        "the note must say the section was not scanned, never that it is empty: {notes:?}"
+    );
+
+    for path in [&used, &orphan, &incomplete] {
+        assert!(path.exists(), "a bare run must not touch the hub: {path:?}");
+    }
+}
+
+#[test]
+fn only_model_caches_plans_the_orphans_and_keeps_everything_a_snapshot_links() {
+    let home = home();
+    let (root, used, orphan, incomplete) = hub_cache(home.path());
+
+    let preview = run_in(
+        home.path(),
+        &["clean", "--only", "model-caches", "--dry-run", "--json"],
+    );
+    assert_eq!(preview.code, Some(0), "stderr: {}", preview.stderr);
+    let preview: serde_json::Value = serde_json::from_str(&preview.stdout).expect("one document");
+    assert_eq!(
+        preview["totals"]["items"], 2,
+        "only the orphan and the abandoned download are planned: {preview}"
+    );
+
+    let rules = preview["rules"].as_array().expect("rules");
+    assert_eq!(
+        rules.len(),
+        3,
+        "naming the section must not widen the run to other sections: {preview}"
+    );
+
+    let applied = run_in(home.path(), &["clean", "--yes", "--only", "model-caches"]);
+    assert_eq!(applied.code, Some(0), "stderr: {}", applied.stderr);
+
+    assert!(!orphan.exists(), "the unreferenced blob is a leftover");
+    assert!(!incomplete.exists(), "an abandoned download is a leftover");
+    assert!(used.exists(), "a blob a snapshot links to is the model");
+    assert!(
+        root.join("snapshots/deadbee/config.json").exists(),
+        "the snapshot entry is never deleted"
+    );
+    assert!(
+        !std::fs::read(root.join("snapshots/deadbee/config.json"))
+            .expect("the surviving link must resolve")
+            .is_empty(),
+        "the snapshot must still read after the sweep"
+    );
+    assert!(
+        root.join("refs/main").exists(),
+        "refs are the record of what is installed"
+    );
+
+    let removed: BTreeSet<PathBuf> = log_rows(home.path())
+        .iter()
+        .filter(|row| row["action"] == "REMOVED")
+        .map(|row| PathBuf::from(row["path"].as_str().expect("path")))
+        .collect();
+    assert_eq!(
+        removed,
+        BTreeSet::from([orphan, incomplete]),
+        "the ledger must name exactly the two leftovers"
+    );
+}
+
+#[test]
+fn a_repository_whose_snapshots_cannot_be_read_is_preserved_whole() {
+    let home = home();
+    let (_, _, orphan, incomplete) = hub_cache(home.path());
+    let snapshots = home
+        .path()
+        .join(".cache/huggingface/hub/models--org--name/snapshots");
+    std::fs::remove_dir_all(&snapshots).expect("remove");
+    // A file where the snapshot directory belongs: reading it fails, and a
+    // failed read must never be taken as "nothing is referenced".
+    write(
+        home.path(),
+        ".cache/huggingface/hub/models--org--name/snapshots",
+        "not a directory",
+    );
+
+    let output = run_in(
+        home.path(),
+        &["clean", "--only", "model-caches", "--dry-run", "--json"],
+    );
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("one document");
+    assert_eq!(
+        report["totals"]["items"], 0,
+        "an unreadable snapshot tree must preserve the repository: {report}"
+    );
+
+    let hub = report["rules"]
+        .as_array()
+        .expect("rules")
+        .iter()
+        .find(|run| run["id"] == "model.huggingface.hub")
+        .expect("the hub rule is listed")
+        .clone();
+    assert!(
+        hub["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("preserved"),
+        "the report must say the repository was kept and why: {hub}"
+    );
+    let notes = report["notes"]
+        .as_array()
+        .expect("notes")
+        .iter()
+        .filter_map(|note| note.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        notes
+            .iter()
+            .any(|note| note.contains("preserved") && note.contains("models--org--name")),
+        "preserving a repository is a summary fact, not a `-v` detail: {notes:?}"
+    );
+    assert!(
+        orphan.exists() && incomplete.exists(),
+        "nothing was removed"
+    );
+}
+
 #[test]
 fn yes_with_dry_run_is_a_usage_error() {
     let home = home();

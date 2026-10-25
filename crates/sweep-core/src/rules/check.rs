@@ -45,6 +45,7 @@ pub enum RuleErrorKind {
     BareRoot,
     MissingEvidence,
     ZeroKeepDays,
+    UnsafeRetention,
     RootPrivilege,
     MissingPattern,
     UnusedPattern,
@@ -71,6 +72,7 @@ impl RuleErrorKind {
             RuleErrorKind::BareRoot => "bare_root",
             RuleErrorKind::MissingEvidence => "missing_evidence",
             RuleErrorKind::ZeroKeepDays => "zero_keep_days",
+            RuleErrorKind::UnsafeRetention => "unsafe_retention",
             RuleErrorKind::RootPrivilege => "root_privilege",
             RuleErrorKind::MissingPattern => "missing_pattern",
             RuleErrorKind::UnusedPattern => "unused_pattern",
@@ -328,6 +330,21 @@ pub fn compile(raw: RawRule, pack: &str, xdg: &Xdg) -> Result<Rule, RuleError> {
             pack,
             Some(&label),
             "kind needs a non-empty evidence line: why is it safe to delete here?".to_string(),
+        ));
+    }
+
+    // The hub writes a blob first and the snapshot link second, and its
+    // `.incomplete` files are updated in place while a download runs. A
+    // retention of zero would treat both as leftovers the instant they exist,
+    // so the kind refuses to load without a real window.
+    if kind == Kind::HfCache && keep_days == 0 {
+        return Err(fail(
+            RuleErrorKind::UnsafeRetention,
+            pack,
+            Some(&label),
+            "kind = \"hf-cache\" needs keep_days > 0: a blob with no snapshot link may belong \
+             to a download that has not finished, so \"everything right now\" is not a safe rule"
+                .to_string(),
         ));
     }
 
@@ -673,6 +690,37 @@ privilege = "root"
     }
 
     #[test]
+    fn a_hub_cache_needs_a_real_retention() {
+        // The hub writes a blob before the snapshot link that references it, and
+        // an `.incomplete` file is only a leftover once it stops growing.
+        let body = base("model.hub")
+            .replace("dir-age", "hf-cache")
+            .replace("keep_days = 30", "keep_days = 0");
+        let error = first_error(one(&body));
+        assert_eq!(error.kind, RuleErrorKind::UnsafeRetention);
+        assert!(
+            error.message.contains("hf-cache"),
+            "the refusal must name the kind: {}",
+            error.message
+        );
+
+        let ok = base("model.hub").replace("dir-age", "hf-cache");
+        let set = one(&ok).expect("a retention makes the rule safe");
+        assert_eq!(set.rules()[0].kind, Kind::HfCache);
+        assert_eq!(set.rules()[0].keep_days, 30);
+    }
+
+    #[test]
+    fn a_hub_cache_ignores_patterns_like_every_other_kind() {
+        let body = format!(
+            "{}\npattern = \"*.bin\"\n",
+            base("model.hub").replace("dir-age", "hf-cache")
+        );
+        let error = first_error(one(&body));
+        assert_eq!(error.kind, RuleErrorKind::UnusedPattern);
+    }
+
+    #[test]
     fn a_retention_the_kind_never_reads_is_refused() {
         // `rules list` prints keep_days, so a value the engine ignores would be
         // a report that disagrees with the run.
@@ -806,6 +854,7 @@ privilege = "root"
             RuleErrorKind::BareRoot,
             RuleErrorKind::MissingEvidence,
             RuleErrorKind::ZeroKeepDays,
+            RuleErrorKind::UnsafeRetention,
             RuleErrorKind::RootPrivilege,
             RuleErrorKind::MissingPattern,
             RuleErrorKind::UnusedPattern,

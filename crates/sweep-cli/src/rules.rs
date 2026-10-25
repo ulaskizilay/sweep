@@ -26,6 +26,8 @@ struct SectionReport {
     section: &'static str,
     rules: usize,
     enabled: usize,
+    /// True when `clean` skips the whole section unless it is named with `--only`.
+    opt_in: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -196,6 +198,7 @@ fn build(set: &RuleSet, xdg: &Xdg) -> ListReport {
             section: summary.section.as_str(),
             rules: summary.rules,
             enabled: summary.enabled,
+            opt_in: summary.section.is_opt_in(),
         })
         .collect();
 
@@ -268,8 +271,24 @@ fn render(report: &ListReport, verbose: u8) -> String {
     ));
     for section in &report.sections {
         out.push_str(&format!(
-            "  {:<18} {:>5} {:>8}\n",
-            section.section, section.rules, section.enabled
+            "  {:<18} {:>5} {:>8}{}\n",
+            section.section,
+            section.rules,
+            section.enabled,
+            if section.opt_in { "  opt-in" } else { "" }
+        ));
+    }
+    let opt_in: Vec<&str> = report
+        .sections
+        .iter()
+        .filter(|section| section.opt_in)
+        .map(|section| section.section)
+        .collect();
+    if !opt_in.is_empty() {
+        out.push_str(&format!(
+            "\n  {} {} opt-in: `sweep clean` leaves it alone until you name it with `--only`.\n",
+            opt_in.join(", "),
+            if opt_in.len() == 1 { "is" } else { "are" }
         ));
     }
 

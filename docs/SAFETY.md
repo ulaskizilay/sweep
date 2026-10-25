@@ -245,6 +245,32 @@ summary is a sum of inode sizes and is labelled as one.
 `unknown_mount`. This happens with a truncated `mountinfo` or a path outside
 every visible mount, and neither is a reason to proceed.
 
+### Blob stores are scanned by reference, not by name
+
+Some caches are not trees of files: each file is stored once under a content
+address and linked into every name that uses it. The Hugging Face hub is the
+first one sweep reaches — `blobs/<etag>` plus `snapshots/<revision>/<path>`
+symlinks — and a name-based sweep there is actively harmful. Deleting the blobs
+leaves every snapshot dangling, so the model looks installed, fails at load time,
+and never re-downloads because its revision is still in `refs/`.
+
+The scanner in `model_cache.rs` therefore starts from the *referrers*: it reads
+every link below `snapshots/` with `read_link`, resolves it lexically, and only
+plans a blob whose path never appears. Two consequences matter for safety:
+
+* **Nothing is followed.** A snapshot entry pointing at `/etc/shadow` is a string
+  compared against blob paths, never a file sweep opens.
+* **An unreadable reference set is not an empty one.** If `snapshots/` cannot be
+  read, or the tree is deeper than the scanner understands, that repository is
+  preserved whole and named in the report. The retention is what makes a
+  genuinely absent `snapshots/` directory safe to read as "no references".
+
+**Why the section is opt-in.** Deleting a model blob may not be recoverable: a
+gated repository needs a licence acceptance, a private one needs a token, and an
+offline machine can reach neither. `clean` therefore skips `model-caches`
+entirely unless the user names it with `--only`, and reports it as not scanned
+rather than as empty.
+
 ---
 
 ## 10. Verification and logging
@@ -359,6 +385,15 @@ Summed `st_blocks` over-counts shared extents on btrfs/XFS-reflink. Reports labe
 the figure **accounted** and note the CoW caveat when a rule root is on such a
 filesystem, so nothing is claimed as freed. Printing the `statvfs` delta next to
 it — rather than instead of it — is the remaining accounting task.
+
+### R7. A paused download looks abandoned
+
+`huggingface_hub` writes `<etag>.incomplete` while a download runs and renames it
+on completion. A download paused for longer than the retention is
+indistinguishable from one whose client died, so `hf-cache` will plan it. The
+cost is a re-download — the partial bytes are the only thing lost — and the
+90-day default is what keeps that from being a nuisance. There is no marker on
+disk that separates the two cases, so this is accepted rather than solved.
 
 ---
 
