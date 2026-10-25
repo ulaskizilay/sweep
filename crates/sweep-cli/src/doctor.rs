@@ -53,7 +53,7 @@ pub fn run(json: bool) -> ExitCode {
         Ok(report) => report,
         Err(message) => {
             eprintln!("sweep doctor: {message}");
-            return ExitCode::from(78);
+            return ExitCode::from(crate::EXIT_UNSUPPORTED_ENVIRONMENT);
         }
     };
 
@@ -70,7 +70,7 @@ pub fn run(json: bool) -> ExitCode {
             "sweep doctor: refusing to run as root; run as your user and let sweep \
              request privilege for system sections only"
         );
-        return ExitCode::from(78);
+        return ExitCode::from(crate::EXIT_UNSUPPORTED_ENVIRONMENT);
     }
     ExitCode::SUCCESS
 }

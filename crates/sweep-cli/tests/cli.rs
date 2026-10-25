@@ -142,20 +142,84 @@ fn doctor_reports_the_real_effective_uid() {
 
 #[test]
 fn root_invocation_is_refused_with_exit_78() {
-    // The kernel refuses root by design. CI runs unprivileged, so this checks the
-    // refusal only when the suite is actually run as root; either way it asserts
-    // that the non-root path is the one that succeeded.
-    let json = run(&["doctor", "--json"]);
-    let value: serde_json::Value = serde_json::from_str(&json.stdout).expect("json");
-    if value["running_as_root"] == false {
-        assert_eq!(json.code, Some(0), "stderr: {}", json.stderr);
+    // CI runs unprivileged, so the only way to exercise the refusal end to end
+    // is to actually be uid 0. When the suite runs as root this asserts the
+    // refusal; otherwise it asserts the ordinary path. The refusal *logic* is
+    // unit-tested in `main.rs` against a literal uid 0, which is the part that
+    // can otherwise rot unnoticed.
+    let is_root = Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|text| text.trim() == "0")
+        .unwrap_or(false);
+
+    if is_root {
+        let refused = run(&["doctor", "--json"]);
+        assert_eq!(refused.code, Some(78), "root must be refused with 78");
+        assert!(
+            refused.stderr.contains("refusing to run as root"),
+            "the refusal must say why: {:?}",
+            refused.stderr
+        );
+        assert!(
+            refused.stdout.is_empty(),
+            "a refused run must not emit a report: {:?}",
+            refused.stdout
+        );
         return;
     }
-    let output = run(&["doctor"]);
-    assert_eq!(output.code, Some(78), "root must be refused with 78");
+
+    let json = run(&["doctor", "--json"]);
+    assert_eq!(json.code, Some(0), "stderr: {}", json.stderr);
+    let value: serde_json::Value = serde_json::from_str(&json.stdout).expect("json");
+    assert_eq!(
+        value["running_as_root"], false,
+        "an ordinary user must not be reported as root"
+    );
+}
+
+#[test]
+fn a_real_uid_zero_process_is_refused() {
+    // `unshare -r` maps the caller to uid 0 inside a new user namespace, which is
+    // the only way an unprivileged test suite can present a genuine `geteuid()
+    // == 0` to the binary. Skipped where unprivileged user namespaces are
+    // disabled, because that is an environment limitation and not a defect.
+    let probe = Command::new("unshare")
+        .args(["-r", "id", "-u"])
+        .output()
+        .ok();
+    let uid_zero = probe
+        .as_ref()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim() == "0")
+        .unwrap_or(false);
+    if !uid_zero {
+        eprintln!("skipping: unprivileged user namespaces unavailable");
+        return;
+    }
+
+    let output = Command::new("unshare")
+        .arg("-r")
+        .arg(env!("CARGO_BIN_EXE_sweep"))
+        .args(["doctor", "--json"])
+        .output()
+        .expect("spawn under unshare");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(78),
+        "a uid-0 process must be refused with 78; stdout={stdout:?} stderr={stderr:?}"
+    );
     assert!(
-        output.stderr.contains("root"),
-        "the refusal must say why: {:?}",
-        output.stderr
+        stderr.contains("refusing to run as root"),
+        "stderr must name the cause: {stderr:?}"
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "a refused run must produce no report: {stdout:?}"
     );
 }

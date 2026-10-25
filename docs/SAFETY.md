@@ -264,6 +264,16 @@ every visible mount, and neither is a reason to proceed.
 as root would source user-owned state — config, rule files, cache paths — with
 privilege it was not granted for.
 
+The check runs before command dispatch, not inside each subcommand, so a new
+subcommand cannot forget it. Exit code 78 means "this environment cannot run
+sweep", which a script can tell apart from 2 ("the argument was wrong").
+
+The refusal is verified against a real `uid 0` process: the test suite runs the
+binary under `unshare -r`, which maps the caller to root inside a user namespace
+without needing privilege. That case is the one that would otherwise only ever
+be exercised by whoever ran the suite from a root shell, which is exactly
+nobody.
+
 System sections request privilege for themselves, through one narrow path, and
 never persist the choice across commands. Nothing in the current milestone
 performs a privileged operation; the boundary is in place before the first
