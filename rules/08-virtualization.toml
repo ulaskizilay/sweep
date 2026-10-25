@@ -1,0 +1,79 @@
+# Virtual machines and containers - cautious by design.
+#
+# A container image is re-downloadable, but on a metered connection or a machine
+# that is offline it is expensive, and `docker system prune` deletes build cache
+# that a running multi-stage build depends on. Docker and Podman therefore appear
+# as reports. The only deletions here are a log directory with a settled format
+# and a scratch directory the tool itself treats as temporary.
+#
+# Never a rule: /var/lib/libvirt/images, ~/.vagrant.d/boxes, and any qcow2 or
+# vdi file. Those are machines, not caches.
+
+[meta]
+name = "virtualization"
+description = "VirtualBox logs, QEMU cache, Vagrant scratch, and read-only reports for Docker and Podman"
+
+[[rule]]
+id = "virt.virtualbox.logs"
+section = "virtualization"
+kind = "file-pattern"
+root = "{config}/VirtualBox"
+pattern = "*.log"
+evidence = "VirtualBox writes one log per VM launch; the running VM's log is inside the retention window."
+recoverable = true
+keep_days = 7
+requires = ["bin:VirtualBox"]
+privilege = "user"
+max_depth = 1
+
+[[rule]]
+id = "virt.qemu.cache"
+section = "virtualization"
+kind = "dir-sweep"
+root = "{cache}/qemu"
+evidence = "QEMU's user-mode cache, rebuilt on demand."
+recoverable = true
+keep_days = 0
+requires = ["bin:qemu-system-x86_64"]
+privilege = "user"
+
+[[rule]]
+id = "virt.vagrant.tmp"
+section = "virtualization"
+kind = "dir-sweep"
+root = "{home}/.vagrant.d/tmp"
+evidence = "Vagrant's scratch directory, cleaned by Vagrant itself after each operation."
+recoverable = true
+keep_days = 0
+requires = ["dir:{home}/.vagrant.d"]
+privilege = "user"
+
+[[rule]]
+id = "virt.docker.report"
+section = "virtualization"
+kind = "report-only"
+root = "/var/lib/docker"
+evidence = "Reported, never deleted: `docker system prune` owns this decision and the daemon is running."
+keep_days = 30
+privilege = "root"
+enabled = false
+
+[[rule]]
+id = "virt.podman.report"
+section = "virtualization"
+kind = "report-only"
+root = "{data}/containers/storage"
+evidence = "Reported, never deleted: `podman system prune` owns this decision."
+keep_days = 30
+privilege = "user"
+enabled = false
+
+[[rule]]
+id = "virt.libvirt.report"
+section = "virtualization"
+kind = "report-only"
+root = "/var/lib/libvirt/images"
+evidence = "Reported, never deleted: these are virtual disks, not caches."
+keep_days = 30
+privilege = "root"
+enabled = false

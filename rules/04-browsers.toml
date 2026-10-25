@@ -1,0 +1,120 @@
+# Browser caches.
+#
+# Every rule here points at a *cache directory tree*, never at a profile. On
+# Linux both Firefox and the Chromium family keep network and shader caches for
+# all profiles under $XDG_CACHE_HOME, while bookmarks, history, cookies, logins
+# and form data live under $XDG_CONFIG_HOME or ~/.mozilla. That separation is
+# what makes a whole-tree sweep safe here and unsafe one directory over.
+#
+# Protected, in every rule below:
+#
+#   cookies.sqlite, places.sqlite, logins.json, key4.db, cert9.db,
+#   Local Storage/, IndexedDB/, Session Storage/, History, Bookmarks,
+#   "Login Data", "Web Data", Sessions/
+#
+# Profile discovery is not needed for the cache trees, but it is needed for
+# Flatpak (`~/.var/app/<id>/cache`) and for a per-profile breakdown. Both arrive
+# with the discovery mechanism in M3.
+
+[meta]
+name = "browsers"
+description = "Network, shader and code caches of the installed browsers"
+
+[[rule]]
+id = "browser.firefox.cache"
+section = "browsers"
+kind = "dir-sweep"
+root = "{cache}/mozilla/firefox"
+evidence = "Firefox keeps cache2, startupCache and shader-cache here; profile data lives under ~/.mozilla."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/mozilla/firefox"]
+privilege = "user"
+
+[[rule]]
+id = "browser.librewolf.cache"
+section = "browsers"
+kind = "dir-sweep"
+root = "{cache}/librewolf"
+evidence = "LibreWolf is a Firefox derivative with an identical cache layout."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/librewolf"]
+privilege = "user"
+
+[[rule]]
+id = "browser.zen.cache"
+section = "browsers"
+kind = "dir-sweep"
+root = "{cache}/zen"
+evidence = "Zen is a Firefox derivative with an identical cache layout."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/zen"]
+privilege = "user"
+
+[[rule]]
+id = "browser.chromium.cache"
+section = "browsers"
+kind = "dir-sweep"
+root = "{cache}/chromium"
+evidence = "Chromium stores cache, code cache, GPUCache and Crashpad here; the profile lives under ~/.config."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/chromium"]
+privilege = "user"
+
+[[rule]]
+id = "browser.chrome.cache"
+section = "browsers"
+kind = "dir-sweep"
+root = "{cache}/google-chrome"
+evidence = "Google Chrome keeps its disposable caches under the cache base."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/google-chrome"]
+privilege = "user"
+
+[[rule]]
+id = "browser.brave.cache"
+section = "browsers"
+kind = "dir-sweep"
+root = "{cache}/BraveSoftware"
+evidence = "Brave keeps its caches in a vendor directory named after the company."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/BraveSoftware"]
+privilege = "user"
+
+[[rule]]
+id = "browser.edge.cache"
+section = "browsers"
+kind = "dir-sweep"
+root = "{cache}/microsoft-edge"
+evidence = "Edge on Linux follows the Chromium cache layout."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/microsoft-edge"]
+privilege = "user"
+
+[[rule]]
+id = "browser.vivaldi.cache"
+section = "browsers"
+kind = "dir-sweep"
+root = "{cache}/vivaldi"
+evidence = "Vivaldi follows the Chromium cache layout."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/vivaldi"]
+privilege = "user"
+
+[[rule]]
+id = "browser.opera.cache"
+section = "browsers"
+kind = "dir-sweep"
+root = "{cache}/opera"
+evidence = "Opera follows the Chromium cache layout."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/opera"]
+privilege = "user"

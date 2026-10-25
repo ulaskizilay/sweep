@@ -33,6 +33,8 @@ pub mod paths;
 pub mod plan;
 pub mod policy;
 pub mod probe;
+pub mod rules;
+pub mod scan;
 pub mod sys;
 pub mod validate;
 
@@ -43,6 +45,8 @@ pub use oplog::{Action, Oplog, Record};
 pub use paths::{Xdg, XdgError};
 pub use plan::{DeniedItem, Plan, PlanItem, RuleId};
 pub use probe::{FsProbe, OpenInodes, ProcRef, RealProbe};
+pub use rules::{Kind, Privilege, Requirement, Rule, RuleError, RuleErrorKind, RuleSet, Section};
+pub use scan::{Block, BlockKind, Collect, Entry, Limits, Select, Spec, Stats, Stop};
 pub use validate::{is_deletable, validate, AllowedRoot, Policy, Reason, ValidateCtx, Verdict};
 
 /// Crate version, reported by `sweep doctor`.

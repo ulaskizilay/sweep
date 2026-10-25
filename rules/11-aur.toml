@@ -1,0 +1,69 @@
+# AUR helper caches.
+#
+# `paru` and `yay` keep a full git clone per package under `~/.cache`. Deleting
+# the clone is safe for an unmodified package: the PKGBUILD is fetched again.
+#
+# It is not safe when the user edited the PKGBUILD, which is common for AUR
+# packages: that edit exists nowhere else. A directory that contains a PKGBUILD
+# the user touched is therefore excluded from the sweep, and a clone whose state
+# cannot be judged is report-only.
+#
+# `pq`/`src` build output is a different thing and is swept: it is produced by
+# makepkg and reproducible from the PKGBUILD.
+
+[meta]
+name = "aur"
+description = "AUR helper build output and clone caches"
+
+[[rule]]
+id = "aur.paru.pkg"
+section = "aur"
+kind = "dir-sweep"
+root = "{cache}/paru/pkg"
+evidence = "Built package archives are reproduced by makepkg from the PKGBUILD on the next build."
+recoverable = true
+keep_days = 0
+requires = ["bin:paru"]
+privilege = "user"
+
+[[rule]]
+id = "aur.paru.clone"
+section = "aur"
+kind = "report-only"
+root = "{cache}/paru/clone"
+evidence = "Reported, never deleted: a user-edited PKGBUILD exists only in this clone."
+keep_days = 30
+privilege = "user"
+enabled = false
+
+[[rule]]
+id = "aur.yay.cache"
+section = "aur"
+kind = "report-only"
+root = "{cache}/yay"
+evidence = "Reported, never deleted: a user-edited PKGBUILD exists only in this clone."
+keep_days = 30
+privilege = "user"
+enabled = false
+
+[[rule]]
+id = "aur.aurutils.cache"
+section = "aur"
+kind = "dir-sweep"
+root = "{cache}/aurutils"
+evidence = "Repository sync scratch space, rebuilt from the AUR on the next sync."
+recoverable = true
+keep_days = 0
+requires = ["bin:aurutils"]
+privilege = "user"
+
+[[rule]]
+id = "aur.trizen.cache"
+section = "aur"
+kind = "dir-sweep"
+root = "{cache}/trizen"
+evidence = "Build scratch space; a missing package is cloned again from the AUR."
+recoverable = true
+keep_days = 0
+requires = ["bin:trizen"]
+privilege = "user"

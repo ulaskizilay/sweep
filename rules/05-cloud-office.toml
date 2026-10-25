@@ -1,0 +1,118 @@
+# Cloud sync clients, office suites and mail caches.
+#
+# The distinction that matters here is between a synced *cache* and synced
+# *content*. Dropbox, OneDrive and rclone keep both under similar names, so each
+# rule names a directory whose contents are derived from the server:
+#
+#   ~/.cache/dropbox, ~/.cache/onedrive, ~/.cache/rclone/vfs
+#
+# Never a rule: `~/Dropbox`, `~/OneDrive` (the user's files), Thunderbird's
+# profile directory, and any `*.pst` / `*.ost` mailbox. A mail cache is a cache;
+# a mailbox is correspondence.
+
+[meta]
+name = "cloud-office"
+description = "Sync client caches, office suite caches and mail caches"
+
+[[rule]]
+id = "cloud.dropbox.cache"
+section = "cloud-office"
+kind = "dir-sweep"
+root = "{cache}/dropbox"
+evidence = "Dropbox keeps a local index and thumbnails here; file content lives in the sync folder."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/dropbox"]
+privilege = "user"
+
+[[rule]]
+id = "cloud.insync.cache"
+section = "cloud-office"
+kind = "dir-sweep"
+root = "{cache}/insync"
+evidence = "Insync's cache is rebuilt from Google Drive metadata."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/insync"]
+privilege = "user"
+
+[[rule]]
+id = "cloud.onedrive.cache"
+section = "cloud-office"
+kind = "dir-sweep"
+root = "{cache}/onedrive"
+evidence = "The abraunegg client caches directory listings and file metadata."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/onedrive"]
+privilege = "user"
+
+# rclone's VFS cache holds partially downloaded files. A day-old fragment is
+# resumable from the remote, a five-minute-old one may be mid-transfer.
+[[rule]]
+id = "cloud.rclone.vfs"
+section = "cloud-office"
+kind = "dir-age"
+root = "{cache}/rclone/vfs"
+evidence = "A VFS fragment untouched for a week cannot be part of a running transfer; rclone fetches it again."
+recoverable = true
+keep_days = 7
+requires = ["dir:{cache}/rclone"]
+privilege = "user"
+
+[[rule]]
+id = "office.libreoffice.cache"
+section = "cloud-office"
+kind = "dir-sweep"
+root = "{cache}/libreoffice"
+evidence = "LibreOffice rebuilds its configuration cache from the user profile on start."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/libreoffice"]
+privilege = "user"
+
+[[rule]]
+id = "office.onlyoffice.cache"
+section = "cloud-office"
+kind = "dir-sweep"
+root = "{cache}/onlyoffice"
+evidence = "Document editor cache, rebuilt when a document is opened again."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/onlyoffice"]
+privilege = "user"
+
+# LibreOffice writes crash-recovery copies into the user profile. They are only
+# useful while the session they belong to could still be recovered.
+[[rule]]
+id = "office.libreoffice.backup"
+section = "cloud-office"
+kind = "dir-age"
+root = "{config}/libreoffice/4/user/backup"
+evidence = "Crash-recovery copies older than a week belong to a session that has long ended."
+recoverable = true
+keep_days = 7
+requires = ["dir:{config}/libreoffice"]
+privilege = "user"
+
+[[rule]]
+id = "mail.thunderbird.cache"
+section = "cloud-office"
+kind = "dir-sweep"
+root = "{cache}/thunderbird"
+evidence = "Thunderbird's network and startup caches; the profile with Mail/, ImapMail/ and address books is elsewhere."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/thunderbird"]
+privilege = "user"
+
+[[rule]]
+id = "mail.evolution.cache"
+section = "cloud-office"
+kind = "dir-age"
+root = "{cache}/evolution"
+evidence = "Evolution caches message bodies it can fetch again from the server."
+recoverable = true
+keep_days = 7
+requires = ["dir:{cache}/evolution"]
+privilege = "user"

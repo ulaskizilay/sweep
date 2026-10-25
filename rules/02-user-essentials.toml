@@ -1,0 +1,79 @@
+# The cache base itself, thumbnails, and the junk that accumulates in $HOME.
+#
+# `user.cache.residual` is the only rule in the catalog that sweeps a base
+# directory. It is allowed to because the XDG specification defines
+# $XDG_CACHE_HOME as data applications must be able to lose, and it is age-gated
+# so "unused for a week" is measured rather than assumed.
+#
+# Two mechanisms keep it from swallowing the rest of the catalog:
+#
+#   * every other rule's root is excluded from its walk, so a target with a
+#     retention policy of its own is never taken by the residual sweep;
+#   * `ms-playwright` is named in `exclude` because a re-download is hundreds of
+#     megabytes that a user did not ask for.
+#
+# Anonymous cache directories - the Electron application nobody wrote a rule for
+# - are exactly what this rule is for.
+
+[meta]
+name = "user-essentials"
+description = "The cache base, thumbnails, trash size and stray home-directory files"
+
+[[rule]]
+id = "user.cache.residual"
+section = "user-essentials"
+kind = "dir-age"
+root = "{cache}"
+exclude = ["ms-playwright*"]
+evidence = "The XDG cache base holds data applications must tolerate losing; an entry untouched for a week is not in use."
+recoverable = true
+keep_days = 7
+privilege = "user"
+
+[[rule]]
+id = "user.thumbnails"
+section = "user-essentials"
+kind = "dir-age"
+root = "{cache}/thumbnails"
+evidence = "Thumbnails are derived from the image files and regenerated on demand."
+recoverable = true
+keep_days = 30
+privilege = "user"
+
+# Trash is report-only until file and `.trashinfo` records can be removed as a
+# pair. Deleting `files/` alone leaves a restore dialog full of entries whose
+# payload is gone.
+[[rule]]
+id = "user.trash.report"
+section = "user-essentials"
+kind = "report-only"
+root = "{data}/Trash/files"
+evidence = "Reported, never deleted: paired removal of files/ and info/ arrives with the trash handler."
+keep_days = 30
+privilege = "user"
+
+[[rule]]
+id = "user.xsession-errors"
+section = "user-essentials"
+kind = "file-pattern"
+root = "{home}"
+pattern = ".xsession-errors*"
+evidence = "The X session log is overwritten on the next login; it is not a user document."
+recoverable = true
+keep_days = 7
+privilege = "user"
+max_depth = 1
+
+# Windows artifacts, not KDE's `.directory`: that one carries folder-view
+# settings a user may have chosen deliberately.
+[[rule]]
+id = "user.windows-metadata"
+section = "user-essentials"
+kind = "file-pattern"
+root = "{home}"
+pattern = ["Thumbs.db", "desktop.ini"]
+evidence = "Explorer metadata files have no meaning on Linux and are recreated by the tools that write them."
+recoverable = true
+keep_days = 7
+privilege = "user"
+max_depth = 6

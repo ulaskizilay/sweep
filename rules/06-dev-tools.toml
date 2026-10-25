@@ -1,0 +1,371 @@
+# Developer toolchain caches - the largest section, and the one that repays the
+# most disk on a working machine.
+#
+# Three classes of target are deliberately separated, because "re-downloadable"
+# and "recoverable" are not the same thing:
+#
+#   A. Fetchable from a public index - cargo `.crate` files, pip, uv, yarn,
+#      ccache, nix-era build caches. Default: enabled, with a retention window.
+#
+#   B. May need an account, a licence acceptance, or a network the machine does
+#      not have - Hugging Face, PyTorch hub checkpoints. Default: disabled and
+#      visible, never silently included.
+#
+#   C. A local repository whose only copy may be on this disk - Maven's
+#      `~/.m2/repository`, Gradle's `modules-2`. Default: report-only, forever.
+#
+# A fourth class is absent on purpose: Docker, Podman and buildx are pruned by
+# their own commands and their state is not a cache directory tree. They are
+# reported in the virtualization section, not swept here.
+#
+# Where a tool has its own cache command (`cargo cache`, `go clean -cache`,
+# `npm cache verify`), M3 will try the command first and fall back to the path,
+# recording `via=tool` or `via=path`. M2 is read-only, so the path is all there
+# is.
+
+[meta]
+name = "dev-tools"
+description = "Language and build toolchain caches: cargo, Go, npm, pip, uv, JVM, ccache"
+
+# Cargo's registry cache holds one `.crate` archive per published version.
+# Deleting an archive does not touch `registry/src`, so a project that already
+# built keeps its extracted sources; a rebuild re-downloads only what it needs.
+[[rule]]
+id = "dev.cargo.crate-cache"
+section = "dev-tools"
+kind = "file-pattern"
+root = "{home}/.cargo/registry/cache"
+pattern = "*.crate"
+evidence = "Crate archives are re-downloadable from the registry; extracted sources under registry/src stay."
+recoverable = true
+keep_days = 30
+privilege = "user"
+
+[[rule]]
+id = "dev.rustup.downloads"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{home}/.rustup/downloads"
+evidence = "Partial toolchain downloads; rustup fetches a missing file again."
+recoverable = true
+keep_days = 0
+requires = ["dir:{home}/.rustup"]
+privilege = "user"
+
+[[rule]]
+id = "dev.rustup.tmp"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{home}/.rustup/tmp"
+evidence = "Extraction scratch space, empty between rustup runs."
+recoverable = true
+keep_days = 0
+requires = ["dir:{home}/.rustup"]
+privilege = "user"
+
+# The build cache is one directory that Go recreates; deleting the directory
+# itself is what `go clean -cache` does.
+[[rule]]
+id = "dev.go.build-cache"
+section = "dev-tools"
+kind = "tool-cache"
+root = "{cache}/go-build"
+evidence = "Go's build cache; `go build` repopulates it and correctness never depends on it."
+recoverable = true
+keep_days = 0
+requires = ["bin:go"]
+privilege = "user"
+
+[[rule]]
+id = "dev.go.module-cache"
+section = "dev-tools"
+kind = "dir-age"
+root = "{home}/go/pkg/mod/cache/download"
+evidence = "Module zip and info files are re-downloaded from the proxy; extracted modules live under pkg/mod."
+recoverable = true
+keep_days = 30
+requires = ["bin:go"]
+privilege = "user"
+
+[[rule]]
+id = "dev.npm.cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{cache}/npm/_cacache"
+evidence = "Content-addressed package cache; npm rebuilds the index on the next install."
+recoverable = true
+keep_days = 0
+requires = ["bin:npm"]
+privilege = "user"
+
+[[rule]]
+id = "dev.yarn.cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{cache}/yarn"
+evidence = "Yarn's package cache; a missing entry is fetched from the registry."
+recoverable = true
+keep_days = 0
+requires = ["bin:yarn"]
+privilege = "user"
+
+[[rule]]
+id = "dev.bun.cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{home}/.bun/install/cache"
+evidence = "Bun's install cache; `bun install` downloads what it needs again."
+recoverable = true
+keep_days = 0
+requires = ["bin:bun"]
+privilege = "user"
+
+[[rule]]
+id = "dev.pip.cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{cache}/pip"
+evidence = "Downloaded wheels and sdists; pip fetches them from the index again."
+recoverable = true
+keep_days = 0
+requires = ["bin:pip"]
+privilege = "user"
+
+[[rule]]
+id = "dev.uv.cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{cache}/uv"
+evidence = "uv's wheel and source cache; `uv sync` re-resolves and re-downloads."
+recoverable = true
+keep_days = 0
+requires = ["bin:uv"]
+privilege = "user"
+
+# `virtualenvs` is excluded by name. Recreating an environment is not a download
+# but a full reinstall of every dependency, and it can fail when an index is
+# unreachable - a different cost class from the wheel cache next to it.
+[[rule]]
+id = "dev.poetry.cache"
+section = "dev-tools"
+kind = "dir-age"
+root = "{cache}/pypoetry"
+exclude = ["virtualenvs", "virtualenvs/**"]
+evidence = "Poetry's artifact cache is re-downloadable; the virtualenvs beside it are excluded."
+recoverable = true
+keep_days = 30
+requires = ["bin:poetry"]
+privilege = "user"
+
+[[rule]]
+id = "dev.pre-commit.cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{cache}/pre-commit"
+evidence = "Hook environments are rebuilt from the hook repositories on the next run."
+recoverable = true
+keep_days = 0
+requires = ["bin:pre-commit"]
+privilege = "user"
+
+[[rule]]
+id = "dev.ruff.cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{cache}/ruff"
+evidence = "Linter result cache, regenerated by the next run."
+recoverable = true
+keep_days = 0
+requires = ["bin:ruff"]
+privilege = "user"
+
+[[rule]]
+id = "dev.mypy.cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{cache}/mypy"
+evidence = "Type-checker cache, regenerated by the next run."
+recoverable = true
+keep_days = 0
+requires = ["bin:mypy"]
+privilege = "user"
+
+[[rule]]
+id = "dev.pytest.cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{cache}/pytest"
+evidence = "Last-failed and duration cache, regenerated by the next test run."
+recoverable = true
+keep_days = 0
+requires = ["bin:pytest"]
+privilege = "user"
+
+# Class C: a private or `-SNAPSHOT` artifact may exist nowhere else.
+[[rule]]
+id = "dev.maven.repository"
+section = "dev-tools"
+kind = "report-only"
+root = "{home}/.m2/repository"
+evidence = "Reported, never deleted: a private or snapshot artifact may have no other copy."
+keep_days = 30
+privilege = "user"
+
+# Class C for the same reason, even though many of these are public.
+[[rule]]
+id = "dev.gradle.modules"
+section = "dev-tools"
+kind = "report-only"
+root = "{home}/.gradle/caches/modules-2"
+evidence = "Reported, never deleted: private repositories are configured in the same store."
+keep_days = 30
+privilege = "user"
+
+[[rule]]
+id = "dev.coursier.cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{cache}/coursier"
+evidence = "Scala and sbt dependency cache; resolved again from the configured repositories."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/coursier"]
+privilege = "user"
+
+[[rule]]
+id = "dev.ccache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{cache}/ccache"
+evidence = "Compiler output cache; a miss recompiles the translation unit."
+recoverable = true
+keep_days = 0
+requires = ["bin:ccache"]
+privilege = "user"
+
+[[rule]]
+id = "dev.sccache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{cache}/sccache"
+evidence = "Shared compilation cache; a miss recompiles the translation unit."
+recoverable = true
+keep_days = 0
+requires = ["bin:sccache"]
+privilege = "user"
+
+# Class B: the cache is a content-addressed blob store whose `snapshots/` tree is
+# made of symlinks into `blobs/`. A plain directory sweep leaves dangling links,
+# so the model looks installed but is broken. Disabled until the symlink-aware
+# handler lands.
+[[rule]]
+id = "dev.huggingface.cache"
+section = "dev-tools"
+kind = "report-only"
+root = "{cache}/huggingface/hub"
+evidence = "Reported, never deleted: blobs back a symlink tree and some models are licence-gated."
+keep_days = 90
+privilege = "user"
+enabled = false
+
+[[rule]]
+id = "dev.torch.checkpoints"
+section = "dev-tools"
+kind = "report-only"
+root = "{cache}/torch/hub/checkpoints"
+evidence = "Reported, never deleted: a checkpoint can be hundreds of megabytes behind a gated download."
+keep_days = 90
+privilege = "user"
+enabled = false
+
+[[rule]]
+id = "dev.puppeteer.cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{cache}/puppeteer"
+evidence = "Downloaded browser revisions; reinstalled by the next `npm install`."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/puppeteer"]
+privilege = "user"
+
+[[rule]]
+id = "dev.cypress.cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{cache}/Cypress"
+evidence = "Downloaded test-runner binary cache; reinstalled on demand."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/Cypress"]
+privilege = "user"
+
+# IntelliJ keeps indexes here and rebuilds them on the next project open. The
+# IDE configuration and plugins live under ~/.config and are not touched.
+[[rule]]
+id = "dev.jetbrains.cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{cache}/JetBrains"
+evidence = "IDE indexes and logs are rebuilt from the project and installed plugins."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/JetBrains"]
+privilege = "user"
+
+# Neovim state (shada, swap, undo) lives in ~/.local/state/nvim, which is not a
+# rule and is protected as user state.
+[[rule]]
+id = "dev.nvim.cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{cache}/nvim"
+evidence = "Telescope and LSP caches are rebuilt; editor state lives under ~/.local/state."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/nvim"]
+privilege = "user"
+
+[[rule]]
+id = "dev.gh.cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{cache}/gh"
+evidence = "Cached API responses and release metadata; fetched again on the next call."
+recoverable = true
+keep_days = 0
+requires = ["bin:gh"]
+privilege = "user"
+
+[[rule]]
+id = "dev.mise.cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{cache}/mise"
+evidence = "Tool version manager cache; a missing entry is fetched again."
+recoverable = true
+keep_days = 0
+requires = ["bin:mise"]
+privilege = "user"
+
+[[rule]]
+id = "dev.asdf.downloads"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{home}/.asdf/downloads"
+evidence = "Source archives kept only until the tool version is built."
+recoverable = true
+keep_days = 0
+requires = ["bin:asdf"]
+privilege = "user"
+
+# buildx state includes builder instances and nodes, not only cache, so this is a
+# report rather than a sweep. `docker buildx prune` owns the decision.
+[[rule]]
+id = "dev.docker.buildx"
+section = "dev-tools"
+kind = "report-only"
+root = "{home}/.docker/buildx"
+evidence = "Reported, never deleted: the directory holds builder state, not only cache."
+keep_days = 30
+privilege = "user"

@@ -1,0 +1,44 @@
+# Application logs and crash dumps under ~/.local/share and ~/.config.
+#
+# This section is thin in this build on purpose. The real targets are
+#
+#   {data}/*/logs/*      > 7 days
+#   {config}/*/logs/*    > 7 days
+#   {data}/*/{Cache,cache,Code Cache,GPUCache}
+#
+# which need a discovery mechanism (`*` as a rule-root component) that does not
+# exist yet. A rule that named `{data}` itself would be a rule to delete every
+# application's data, so the section reports instead of guessing.
+#
+# Protected here, permanently:
+#
+#   *.db, *.sqlite*, *.json (configuration), *.toml, *.yaml, Documents/,
+#   projects/, *.key, *.pem
+#
+# The mechanism and the per-application rules arrive in M3.
+
+[meta]
+name = "local-data"
+description = "Application log and crash directories, reported until per-app discovery lands"
+
+[[rule]]
+id = "local.app-logs.report"
+section = "local-data"
+kind = "report-only"
+root = "{data}"
+evidence = "Reported, never deleted: the layout is per-application and needs discovery."
+keep_days = 30
+privilege = "user"
+max_depth = 2
+enabled = false
+
+[[rule]]
+id = "local.config-logs.report"
+section = "local-data"
+kind = "report-only"
+root = "{config}"
+evidence = "Reported, never deleted: configuration lives beside the logs."
+keep_days = 30
+privilege = "user"
+max_depth = 2
+enabled = false

@@ -1,0 +1,35 @@
+# Firmware and device metadata.
+#
+# `fwupd` keeps downloaded firmware payloads and metadata that are fetched again
+# from the Linux Vendor Firmware Service. A payload already staged for an update
+# in progress is inside the retention window.
+#
+# There is no iOS backup section here: there are no iOS backups. The equivalent
+# on this platform is the Android SDK cache, which is derived from the SDK
+# repositories.
+
+[meta]
+name = "firmware"
+description = "fwupd payloads and Android SDK caches"
+
+[[rule]]
+id = "firmware.fwupd.user"
+section = "firmware"
+kind = "dir-age"
+root = "{cache}/fwupd"
+evidence = "Firmware metadata and payloads are fetched again from the LVFS when an update is available."
+recoverable = true
+keep_days = 30
+requires = ["bin:fwupdmgr"]
+privilege = "user"
+
+[[rule]]
+id = "firmware.android.cache"
+section = "firmware"
+kind = "dir-sweep"
+root = "{home}/.android/cache"
+evidence = "SDK manager download cache; missing archives are fetched from the repository."
+recoverable = true
+keep_days = 0
+requires = ["dir:{home}/.android"]
+privilege = "user"

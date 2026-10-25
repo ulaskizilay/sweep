@@ -328,15 +328,20 @@ fn a_root_pinned_to_another_device_refuses_everything_on_this_one() {
 }
 
 #[test]
-fn pinning_a_root_to_its_current_device_reads_the_mount_table() {
-    let probe = FaultyProbe::new(SAMPLE_MOUNTS);
-    let root = AllowedRoot::new("/home/u/.cache").pinned_to_current_device(probe.mount_table());
-    // `/home` is `8:3` in the sample table; the encoding must match `st_dev`.
-    assert_eq!(root.device, Some(sweep_core::sys::makedev(8, 3)));
+fn pinning_a_root_to_its_current_device_uses_st_dev() {
+    // Not the mount table's `major:minor`: on btrfs a subvolume has an anonymous
+    // `st_dev` the table never reports, so pinning from the table would refuse
+    // every child of the root.
+    use std::os::unix::fs::MetadataExt;
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root =
+        AllowedRoot::new(temp.path()).pinned_to_current_device(&sweep_core::MountTable::parse(""));
+    let expected = std::fs::metadata(temp.path()).expect("stat").dev();
+    assert_eq!(root.device, Some(expected));
 }
 
 #[test]
-fn pinning_a_root_that_lives_on_no_mount_leaves_it_unpinned() {
+fn pinning_a_root_that_cannot_be_stat_ed_leaves_it_unpinned() {
     let table = sweep_core::MountTable::parse("");
     let root = AllowedRoot::new("/home/u/.cache").pinned_to_current_device(&table);
     assert_eq!(root.device, None);

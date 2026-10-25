@@ -1,0 +1,62 @@
+# Snapshots and backups - report-only, always.
+#
+# This is the section that replaces a Time Machine panel, and it deletes nothing
+# under any flag. The reasons are structural:
+#
+#   * Inside a btrfs snapshot the bytes are shared with the live filesystem.
+#     "Freeing space" by deleting a snapshot subvolume is a rollback decision, not
+#     a cleanup decision, and the number the user sees is not the number they get.
+#   * Timeshift and restic indices cost hours to rebuild even when the data is
+#     still on disk.
+#   * A backup the user forgot about is the one that saves them.
+#
+# The report is produced by reading each tool's own listing (`snapper list
+# --csvout`, `timeshift --list`, `btrfs subvolume list`, `zfs list -t snapshot`),
+# which arrives with the snapshot report in M7. Until then these rules describe
+# the targets so `sweep rules list` shows the section, and they stay disabled
+# because walking a snapshot tree to count bytes is expensive and tells the user
+# nothing they can act on.
+
+[meta]
+name = "snapshots"
+description = "btrfs, snapper, Timeshift, ZFS, restic and borg - reported, never deleted"
+
+[[rule]]
+id = "snapshot.snapper.report"
+section = "snapshots"
+kind = "report-only"
+root = "/.snapshots"
+evidence = "Reported, never deleted: deleting a snapshot is a rollback decision."
+keep_days = 7
+privilege = "root"
+enabled = false
+
+[[rule]]
+id = "snapshot.timeshift.report"
+section = "snapshots"
+kind = "report-only"
+root = "/timeshift"
+evidence = "Reported, never deleted: Timeshift owns its own retention policy."
+keep_days = 7
+privilege = "root"
+enabled = false
+
+[[rule]]
+id = "snapshot.restic.report"
+section = "snapshots"
+kind = "report-only"
+root = "{cache}/restic"
+evidence = "Reported, never deleted: rebuilding a restic index costs hours even when data remains."
+keep_days = 30
+privilege = "user"
+enabled = false
+
+[[rule]]
+id = "snapshot.borg.report"
+section = "snapshots"
+kind = "report-only"
+root = "{cache}/borg"
+evidence = "Reported, never deleted: rebuilding a borg index costs hours even when data remains."
+keep_days = 30
+privilege = "user"
+enabled = false

@@ -1,0 +1,34 @@
+# Build artifacts inside project directories - the source of `sweep purge`.
+#
+# This section belongs to `purge`, not `clean`: a project is something the user
+# chose to work on, and its artifacts are removed by walking project roots rather
+# than the home directory. Declaring it here keeps one catalog, and the kind that
+# does the work (manifest-gated discovery) lands with `purge` in M5.
+#
+# The protection rules that will govern it, taken from the same evidence model:
+#
+#   * a directory is a project root only if a manifest is present:
+#     package.json, Cargo.toml, go.mod, pyproject.toml, pom.xml, build.gradle,
+#     Gemfile, terragrunt.hcl, composer.json, .git
+#   * `.git` is never a target, and a git worktree root is never a target
+#   * `bin` and `vendor` need a matching manifest; being named `bin` is not proof
+#   * `target` needs Cargo.toml or pom.xml
+#   * ~/.cargo, ~/.rustup, ~/go/pkg/mod and /usr/src are never scanned
+#   * depth 6, no symlink following, no crossing a mount
+#
+# Until that exists this rule is a report-only placeholder and stays disabled.
+
+[meta]
+name = "project-artifacts"
+description = "node_modules, target, venv and friends, manifest-gated - lands with purge in M5"
+
+[[rule]]
+id = "project.artifacts.report"
+section = "project-artifacts"
+kind = "report-only"
+root = "{home}"
+evidence = "Reported, never deleted: a project directory is identified by a manifest, not by its name."
+keep_days = 30
+privilege = "user"
+max_depth = 6
+enabled = false

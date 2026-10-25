@@ -1,0 +1,47 @@
+# Orphaned application data.
+#
+# The rule kind this section needs is `if-missing-owner`, and it is refused at
+# load with "arrives in M5" rather than silently ignored, because an orphan sweep
+# is the most dangerous rule in the catalog: its whole premise is deleting a
+# directory whose owner it could not find.
+#
+# A directory may be deleted only with one of three pieces of evidence:
+#
+#   1. no `.desktop` file in any XDG_DATA_DIRS/applications names it, and its
+#      `Exec=` binary is not on PATH;
+#   2. `pacman -Qqo <path>` says no package owns it, and `pacman -Fy` is current
+#      enough to be evidence rather than a stale index;
+#   3. `flatpak list --app --columns=application` does not list its identifier.
+#
+# Plus: older than 30 days, no `*.db` or `*.sqlite` inside, no `.lock` file, and
+# larger than 1 MiB so noise does not drown the report. If the evidence is
+# incomplete the line is "possible orphan, needs review" and nothing is deleted.
+#
+# Orphaned systemd units are reported only. A unit file is not a cache, and
+# `systemctl disable` is not a cleanup operation.
+
+[meta]
+name = "orphans"
+description = "Application data whose owner is not installed; evidence-gated, lands in M5"
+
+[[rule]]
+id = "orphan.config.report"
+section = "orphans"
+kind = "report-only"
+root = "{config}"
+evidence = "Reported, never deleted: requires desktop-file, package-owner and flatpak evidence."
+keep_days = 30
+privilege = "user"
+max_depth = 1
+enabled = false
+
+[[rule]]
+id = "orphan.data.report"
+section = "orphans"
+kind = "report-only"
+root = "{data}"
+evidence = "Reported, never deleted: requires desktop-file, package-owner and flatpak evidence."
+keep_days = 30
+privilege = "user"
+max_depth = 1
+enabled = false

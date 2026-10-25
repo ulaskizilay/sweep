@@ -43,8 +43,17 @@ impl AllowedRoot {
     }
 
     /// Pins the root to the device it currently lives on.
+    ///
+    /// `st_dev` of the root itself, not the device the mount table reports. On
+    /// btrfs a subvolume carries an anonymous device number that mountinfo never
+    /// mentions, so a mountinfo-pinned root would refuse every one of its own
+    /// children. The mount table stays as a fallback for a root that cannot be
+    /// `stat`ed, which validation refuses anyway for being missing.
     pub fn pinned_to_current_device(mut self, table: &MountTable) -> Self {
-        if let Some(facts) = table.facts(&self.path) {
+        if let Ok(metadata) = std::fs::metadata(&self.path) {
+            use std::os::unix::fs::MetadataExt;
+            self.device = Some(metadata.dev());
+        } else if let Some(facts) = table.facts(&self.path) {
             self.device = Some(crate::sys::makedev(facts.device.0, facts.device.1));
         }
         self

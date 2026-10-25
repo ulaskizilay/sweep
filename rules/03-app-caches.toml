@@ -1,0 +1,146 @@
+# Electron and Chromium application caches.
+#
+# On Linux these applications keep the same directory names they use on every
+# other platform: Cache, Code Cache, GPUCache, DawnCache, ShaderCache, Crashpad,
+# and a logs directory. Only those names are rules.
+#
+# Never a rule, in any of these applications:
+#
+#   Local Storage, IndexedDB, Cookies, Login Data, Web Data, Preferences,
+#   Session Storage, `*.sqlite`, SingletonLock
+#
+# They live next to the cache directories, so a rule that swept the application
+# folder instead of naming the cache children would take the user's session with
+# it. That is why each rule names one directory rather than its parent.
+#
+# The catalog lists the applications that appear on Arch desktops. Adding one is
+# one rule per cache directory; a section for each application arrives with the
+# profile discovery in M3, which is also what covers Flatpak's
+# `~/.var/app/<id>/cache` layout.
+
+[meta]
+name = "app-caches"
+description = "Cache, Code Cache, GPUCache and log directories of Electron applications"
+
+[[rule]]
+id = "app.vscode.cache"
+section = "app-caches"
+kind = "dir-sweep"
+root = "{config}/Code/Cache"
+evidence = "VS Code rebuilds this cache from the workspace and extensions on demand."
+recoverable = true
+keep_days = 0
+requires = ["dir:{config}/Code"]
+privilege = "user"
+
+[[rule]]
+id = "app.vscode.code-cache"
+section = "app-caches"
+kind = "dir-sweep"
+root = "{config}/Code/Code Cache"
+evidence = "Compiled bytecode cache; the renderer recompiles on the next start."
+recoverable = true
+keep_days = 0
+requires = ["dir:{config}/Code"]
+privilege = "user"
+
+[[rule]]
+id = "app.vscode.gpu-cache"
+section = "app-caches"
+kind = "dir-sweep"
+root = "{config}/Code/GPUCache"
+evidence = "GPU shader cache; rebuilt when the editor next renders a window."
+recoverable = true
+keep_days = 0
+requires = ["dir:{config}/Code"]
+privilege = "user"
+
+[[rule]]
+id = "app.vscode.logs"
+section = "app-caches"
+kind = "dir-age"
+root = "{config}/Code/logs"
+evidence = "Editor logs are diagnostics for the current session, not user data."
+recoverable = true
+keep_days = 7
+requires = ["dir:{config}/Code"]
+privilege = "user"
+
+[[rule]]
+id = "app.vscodium.cache"
+section = "app-caches"
+kind = "dir-sweep"
+root = "{config}/VSCodium/Cache"
+evidence = "The de-branded build uses the same cache layout as VS Code."
+recoverable = true
+keep_days = 0
+requires = ["dir:{config}/VSCodium"]
+privilege = "user"
+
+[[rule]]
+id = "app.cursor.cache"
+section = "app-caches"
+kind = "dir-sweep"
+root = "{config}/Cursor/Cache"
+evidence = "Cursor is an Electron application with the same disposable cache directory."
+recoverable = true
+keep_days = 0
+requires = ["dir:{config}/Cursor"]
+privilege = "user"
+
+[[rule]]
+id = "app.discord.cache"
+section = "app-caches"
+kind = "dir-sweep"
+root = "{config}/discord/Cache"
+evidence = "The chat client re-downloads avatars and message embeds from the service."
+recoverable = true
+keep_days = 0
+requires = ["dir:{config}/discord"]
+privilege = "user"
+
+[[rule]]
+id = "app.discord.code-cache"
+section = "app-caches"
+kind = "dir-sweep"
+root = "{config}/discord/Code Cache"
+evidence = "Renderer bytecode cache, rebuilt on the next launch."
+recoverable = true
+keep_days = 0
+requires = ["dir:{config}/discord"]
+privilege = "user"
+
+[[rule]]
+id = "app.slack.cache"
+section = "app-caches"
+kind = "dir-sweep"
+root = "{config}/Slack/Cache"
+evidence = "Workspace images and link previews are fetched again from Slack."
+recoverable = true
+keep_days = 0
+requires = ["dir:{config}/Slack"]
+privilege = "user"
+
+[[rule]]
+id = "app.slack.code-cache"
+section = "app-caches"
+kind = "dir-sweep"
+root = "{config}/Slack/Code Cache"
+evidence = "Renderer bytecode cache, rebuilt on the next launch."
+recoverable = true
+keep_days = 0
+requires = ["dir:{config}/Slack"]
+privilege = "user"
+
+# Spotify keeps its whole client state under the cache base rather than under
+# ~/.config, and treats a missing directory as a first run.
+[[rule]]
+id = "app.spotify.cache"
+section = "app-caches"
+kind = "dir-sweep"
+root = "{cache}/spotify"
+evidence = "The client re-creates its state directory on launch; playlists are server-side."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/spotify"]
+privilege = "user"

@@ -128,7 +128,7 @@ pub struct DeniedItem {
 pub struct Plan {
     items: Vec<PlanItem>,
     denied: Vec<DeniedItem>,
-    seen: BTreeSet<(String, PathBuf)>,
+    seen: BTreeSet<PathBuf>,
     hash: String,
 }
 
@@ -172,8 +172,12 @@ impl Plan {
         rule: &RuleId,
         meta: &Meta,
     ) {
-        let key = (rule.as_str().to_string(), physical.clone());
-        if !self.seen.insert(key) {
+        // Path-only, not `(rule, path)`: two rules that resolve to the same
+        // directory must not both schedule it, or the second `unlinkat` would
+        // report `ENOENT` for a success. Rules are selected deepest-root-first,
+        // so the narrower rule - with the retention a human chose for that
+        // target - is the one that records the item.
+        if !self.seen.insert(physical.clone()) {
             return;
         }
         self.items.push(PlanItem {
@@ -198,9 +202,17 @@ impl Plan {
     }
 
     /// Sorts and computes the dry-run identity. Call once before applying.
+    ///
+    /// The order is deepest-first because the funnel performs one `unlinkat` per
+    /// item and can never recurse: a directory scheduled before its children
+    /// would fail with `ENOTEMPTY` and be reported as skipped while its children
+    /// were still there. Depth, then path, keeps the run deterministic.
     pub fn finish(&mut self) {
-        self.items
-            .sort_by(|left, right| left.physical.cmp(&right.physical));
+        self.items.sort_by(|left, right| {
+            crate::paths::depth(&right.physical)
+                .cmp(&crate::paths::depth(&left.physical))
+                .then_with(|| left.physical.cmp(&right.physical))
+        });
         self.hash = compute_hash(&self.items);
     }
 
@@ -297,5 +309,69 @@ mod tests {
         plan.push_validated(PathBuf::from("/tmp/a"), Path::new("/tmp/a"), &rule, &meta);
         plan.push_validated(PathBuf::from("/tmp/a"), Path::new("/tmp/a"), &rule, &meta);
         assert_eq!(plan.len(), 1);
+    }
+
+    #[test]
+    fn a_path_claimed_by_two_rules_is_scheduled_once() {
+        // Two rules can resolve to the same directory (a residual sweep and a
+        // narrow one). Scheduling it twice would make the second `unlinkat`
+        // report `ENOENT` for an operation that succeeded.
+        let broad = RuleId::new("user.cache.residual").unwrap();
+        let narrow = RuleId::new("user.thumbnails").unwrap();
+        let meta = Meta::default();
+        let mut plan = Plan::new();
+        plan.push_validated(
+            PathBuf::from("/home/u/.cache/x"),
+            Path::new("/home/u/.cache/x"),
+            &narrow,
+            &meta,
+        );
+        plan.push_validated(
+            PathBuf::from("/home/u/.cache/x"),
+            Path::new("/home/u/.cache/x"),
+            &broad,
+            &meta,
+        );
+        assert_eq!(plan.len(), 1);
+        // The first rule to claim the path keeps it, and the caller is expected
+        // to select deepest-root-first so that rule is the narrow one.
+        assert_eq!(plan.items()[0].rule(), &narrow);
+    }
+
+    #[test]
+    fn children_are_scheduled_before_their_parent() {
+        // The funnel never recurses, so this order is what makes a directory
+        // deletable at all: by the time its own `unlinkat` runs, its children are
+        // already gone.
+        let rule = RuleId::new("test.rule").unwrap();
+        let meta = Meta {
+            mode: libc::S_IFDIR,
+            ..Meta::default()
+        };
+        let file_meta = Meta::default();
+        let mut plan = Plan::new();
+        for path in ["/tmp/a", "/tmp/a/b", "/tmp/a/b/c.bin", "/tmp/a/d.bin"] {
+            plan.push_validated(
+                PathBuf::from(path),
+                Path::new(path),
+                &rule,
+                if path.ends_with(".bin") {
+                    &file_meta
+                } else {
+                    &meta
+                },
+            );
+        }
+        plan.finish();
+        let order: Vec<&Path> = plan.items().iter().map(PlanItem::path).collect();
+        let position = |needle: &str| {
+            order
+                .iter()
+                .position(|path| path.to_str() == Some(needle))
+                .expect(needle)
+        };
+        assert!(position("/tmp/a/b/c.bin") < position("/tmp/a/b"));
+        assert!(position("/tmp/a/b") < position("/tmp/a"));
+        assert!(position("/tmp/a/d.bin") < position("/tmp/a"));
     }
 }
