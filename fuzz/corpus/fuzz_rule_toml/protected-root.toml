@@ -1,0 +1,9 @@
+[[rule]]
+id = "bad.root"
+section = "system"
+kind = "dir-sweep"
+root = "/usr"
+evidence = "a protected root must never compile"
+recoverable = true
+keep_days = 0
+privilege = "root"

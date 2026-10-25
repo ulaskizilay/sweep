@@ -185,6 +185,9 @@ jobs:
       - name: fuzz_oplog_escape
         run: cargo fuzz run fuzz_oplog_escape -- -max_total_time=60
 
+      - name: fuzz_rule_toml
+        run: cargo fuzz run fuzz_rule_toml -- -max_total_time=60
+
   # A broken relative link in README/SAFETY is the first sign of a stale claim.
   docs:
     name: docs links

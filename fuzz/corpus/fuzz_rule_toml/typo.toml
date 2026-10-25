@@ -1,0 +1,9 @@
+[[rule]]
+id = "dev.typo"
+section = "dev-tools"
+kind = "dir-age"
+root = "{cache}/typo"
+evidence = "keep_day must not silently become keep_days = 0"
+recoverable = true
+keep_day = 30
+privilege = "user"

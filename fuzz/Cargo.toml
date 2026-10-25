@@ -19,6 +19,12 @@ test = false
 doc = false
 
 [[bin]]
+name = "fuzz_rule_toml"
+path = "fuzz_targets/fuzz_rule_toml.rs"
+test = false
+doc = false
+
+[[bin]]
 name = "fuzz_oplog_escape"
 path = "fuzz_targets/fuzz_oplog_escape.rs"
 test = false

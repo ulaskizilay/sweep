@@ -2,6 +2,9 @@
 **/*.rs.bk
 *.profraw
 /fuzz/target
-/fuzz/corpus
+# Cargo-fuzz writes generated inputs here. The seed corpus for the catalog
+# parser is committed on purpose: it is a regression input, not a build output.
+/fuzz/corpus/*
+!/fuzz/corpus/fuzz_rule_toml/
 /fuzz/artifacts
 /fuzz/Cargo.lock

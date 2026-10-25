@@ -1,0 +1,8 @@
+[[rule]]
+id = "report.journal"
+section = "system"
+kind = "report-only"
+root = "/var/log/journal"
+keep_days = 7
+privilege = "root"
+enabled = false
