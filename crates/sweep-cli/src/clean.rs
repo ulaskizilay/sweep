@@ -1,9 +1,17 @@
-//! `sweep clean` — the preview, in this milestone.
+//! `sweep clean` — plan, confirm, apply.
 //!
-//! M2 ships the read-only half of `clean`: it loads the catalog, decides which
-//! rules apply to this machine, walks their roots, validates every candidate
-//! through [`sweep_core::Plan::push`], and runs the funnel in [`Mode::DryRun`].
-//! Nothing is written: no operation log, no Trash, no `unlinkat`.
+//! The command is two-phase on purpose. [`build`] decides what could go: it
+//! loads the catalog, decides which rules apply to this machine, walks their
+//! roots and validates every candidate through [`sweep_core::Plan::push`]. It
+//! never writes. Only after that plan exists, and only with consent, does
+//! [`sweep_core::funnel::apply`] touch the filesystem — in [`Mode::Apply`] for a
+//! real run, in [`Mode::DryRun`] when the user asked for a preview.
+//!
+//! Consent is explicit: `--yes` for scripts, an interactive prompt otherwise,
+//! and a refusal when stdin is not a terminal. A refusal deletes nothing and
+//! writes nothing, not even the operation log, for the same reason a dry run
+//! does: "there is no record of this run" is better than "the plan directory now
+//! exists because someone asked a question".
 //!
 //! The shape of the run matters more than the output. A rule is skipped for a
 //! reason the user can act on (declared disabled, needs privilege, its tool is
@@ -17,11 +25,13 @@
 //! keeps the subtree.
 
 use std::collections::BTreeMap;
+use std::io::{self, IsTerminal, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use serde::Serialize;
 use sweep_core::fs_facts::MountTable;
+use sweep_core::oplog::Oplog;
 use sweep_core::paths::is_within;
 use sweep_core::probe::RealProbe;
 use sweep_core::rules::{Kind, Privilege, Rule, RuleSet, Section};
@@ -92,8 +102,10 @@ struct SectionRun {
     bytes: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Default)]
 struct FunnelReport {
+    /// Items removed (or that would be removed) at the final sink.
+    removed: usize,
     would_remove: usize,
     skipped: usize,
     failed: usize,
@@ -101,10 +113,44 @@ struct FunnelReport {
     skip_codes: Vec<SkipCode>,
 }
 
+impl FunnelReport {
+    /// `removed` and `would_remove` are disjoint: exactly one of them is
+    /// non-zero, and which one is decided by the mode, not by the data.
+    fn of(report: &funnel::Report, mode: Mode) -> Self {
+        Self {
+            removed: if mode.is_dry_run() {
+                0
+            } else {
+                report.removed()
+            },
+            would_remove: if mode.is_dry_run() {
+                report.would_remove()
+            } else {
+                0
+            },
+            skipped: report.skipped,
+            failed: report.failed,
+            bytes: report.removed_bytes,
+            skip_codes: report
+                .skip_codes()
+                .into_iter()
+                .map(|(code, count)| SkipCode { code, count })
+                .collect(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct SkipCode {
     code: &'static str,
     count: usize,
+}
+
+/// Where this run's rows went. Absent from a dry run, which logs nothing.
+#[derive(Debug, Serialize)]
+struct LogRef {
+    session: String,
+    path: String,
 }
 
 /// Why the policy refused candidates, grouped by rule and reason.
@@ -123,6 +169,7 @@ struct CleanReport {
     rules: Vec<RuleRun>,
     refusals: Vec<Refusal>,
     funnel: FunnelReport,
+    log: Option<LogRef>,
     totals: Totals,
     /// Things a user must know before trusting the numbers above.
     notes: Vec<String>,
@@ -138,18 +185,7 @@ struct Totals {
     bytes: u64,
 }
 
-pub fn run(json: bool, verbose: u8, only: &[Section], dry_run: bool) -> ExitCode {
-    if !dry_run {
-        // Refuse rather than silently previewing: a user who typed `sweep clean`
-        // meant to delete something, and doing something else while reporting
-        // success is worse than doing nothing.
-        eprintln!(
-            "sweep clean: applying deletions arrives in M3; this build can only preview.\n\
-             Run `sweep clean --dry-run` to see what would be removed."
-        );
-        return ExitCode::from(crate::EXIT_NOT_IMPLEMENTED);
-    }
-
+pub fn run(json: bool, verbose: u8, only: &[Section], dry_run: bool, yes: bool) -> ExitCode {
     let xdg = match Xdg::from_env() {
         Ok(xdg) => xdg,
         Err(error) => {
@@ -189,10 +225,74 @@ pub fn run(json: bool, verbose: u8, only: &[Section], dry_run: bool) -> ExitCode
         }
     };
 
-    let report = build(&set, &xdg, &probe, &mounts, only, &Limits::default());
+    let mode = if dry_run { Mode::DryRun } else { Mode::Apply };
+    let Built { plan, mut report } =
+        build(&set, &xdg, &probe, &mounts, only, &Limits::default(), mode);
 
+    if mode.is_dry_run() {
+        let preview = funnel::apply(&plan, &probe, Mode::DryRun, "clean", None);
+        report.funnel = FunnelReport::of(&preview, mode);
+        return finish(json, verbose, &report, 0);
+    }
+
+    // An empty plan is not a question worth asking, and it must not create the
+    // state directory: nothing happened, so nothing is recorded.
+    if plan.is_empty() {
+        return finish(json, verbose, &report, 0);
+    }
+
+    match confirm(plan.len(), plan.total_bytes(), yes) {
+        Consent::Granted => {}
+        Consent::Declined(message) => {
+            eprintln!("sweep clean: {message}");
+            return ExitCode::from(crate::EXIT_DECLINED);
+        }
+    }
+
+    let session = format!("clean-{}", now_unix());
+    let log_path = xdg.state_dir().join("operations.jsonl");
+    let mut oplog = match Oplog::open(&xdg.state_dir(), session.clone()) {
+        Ok(log) => {
+            report.log = Some(LogRef {
+                session: session.clone(),
+                path: log.path().display().to_string(),
+            });
+            Some(log)
+        }
+        Err(error) => {
+            // Bounded cleanup does not stop because the audit trail is missing;
+            // the report says so instead of pretending the run was recorded.
+            report.notes.push(format!(
+                "the operation log at {} could not be opened ({error}); this run is not recorded",
+                log_path.display()
+            ));
+            None
+        }
+    };
+
+    let applied = funnel::apply(&plan, &probe, Mode::Apply, "clean", oplog.as_mut());
+    report.funnel = FunnelReport::of(&applied, mode);
+
+    let code = if applied.failed > 0 {
+        eprintln!(
+            "sweep clean: {} items could not be removed and were left in place; \
+             the operation log has the reason for each",
+            applied.failed
+        );
+        1
+    } else {
+        0
+    };
+    // Drop the handle before reporting so a buffered record cannot outlive the
+    // summary that says the log was written.
+    drop(oplog);
+    finish(json, verbose, &report, code)
+}
+
+/// Prints the report and returns the exit code the command settled on.
+fn finish(json: bool, verbose: u8, report: &CleanReport, code: u8) -> ExitCode {
     if json {
-        match serde_json::to_string_pretty(&report) {
+        match serde_json::to_string_pretty(report) {
             Ok(text) => println!("{text}"),
             Err(error) => {
                 eprintln!("sweep clean: cannot serialise report: {error}");
@@ -200,9 +300,67 @@ pub fn run(json: bool, verbose: u8, only: &[Section], dry_run: bool) -> ExitCode
             }
         }
     } else {
-        print!("{}", render(&report, verbose));
+        print!("{}", render(report, verbose));
     }
-    ExitCode::SUCCESS
+    ExitCode::from(code)
+}
+
+/// What the user said about deleting the plan.
+enum Consent {
+    Granted,
+    /// Refusal text, phrased so the user knows nothing happened and what to do.
+    Declined(String),
+}
+
+/// Asks before deleting, and refuses when there is nobody to ask.
+///
+/// The non-terminal case is the important one: a cron job, a pipe or a CI step
+/// would otherwise answer the prompt with whatever its stdin happens to be. It
+/// is a refusal rather than an automatic yes, and it names the flag that turns
+/// the question off.
+fn confirm(items: usize, bytes: u64, yes: bool) -> Consent {
+    if yes {
+        return Consent::Granted;
+    }
+    if !io::stdin().is_terminal() {
+        return Consent::Declined(format!(
+            "refusing to remove {items} items ({}) without confirmation: stdin is not a \
+             terminal. Re-run with --yes if that is what you meant; nothing was removed.",
+            human_bytes(bytes)
+        ));
+    }
+
+    eprint!(
+        "sweep clean will permanently remove {items} items ({}).\nContinue? [y/N] ",
+        human_bytes(bytes)
+    );
+    let _ = io::stderr().flush();
+
+    let mut answer = String::new();
+    match io::stdin().read_line(&mut answer) {
+        // EOF on a terminal: the user closed the prompt, which is a no.
+        Ok(0) => Consent::Declined("no answer on stdin; nothing was removed".to_string()),
+        Ok(_) => {
+            let answer = answer.trim().to_ascii_lowercase();
+            if answer == "y" || answer == "yes" {
+                Consent::Granted
+            } else {
+                Consent::Declined(
+                    "cancelled; nothing was removed. Run `sweep clean --dry-run` to review \
+                     the plan first."
+                        .to_string(),
+                )
+            }
+        }
+        Err(error) => Consent::Declined(format!(
+            "cannot read the confirmation ({error}); nothing was removed"
+        )),
+    }
+}
+
+struct Built {
+    plan: Plan,
+    report: CleanReport,
 }
 
 fn build(
@@ -212,7 +370,8 @@ fn build(
     mounts: &MountTable,
     only: &[Section],
     limits: &Limits,
-) -> CleanReport {
+    mode: Mode,
+) -> Built {
     let selected = set.select(only, xdg);
     let now = now_unix();
 
@@ -265,7 +424,6 @@ fn build(
     }
 
     plan.finish();
-    let preview = funnel::apply(&plan, probe, Mode::DryRun, "clean", None);
 
     let declared_off = runs
         .iter()
@@ -316,28 +474,46 @@ fn build(
         refused: plan.denied().len(),
         bytes: plan.total_bytes(),
     };
+    if totals.bytes > 0 && touches_copy_on_write(&roots, mounts) {
+        // The number is what the inodes account for, not what `statvfs` will
+        // gain back. On btrfs those differ, and a maintenance tool that silently
+        // equates them is how "freed 40 GB" gets into a bug report about a full
+        // disk.
+        notes.push(
+            "sizes are the sum of st_blocks; on a copy-on-write filesystem, extents shared \
+             with a snapshot or a reflink may free less than that"
+                .to_string(),
+        );
+    }
 
     let refusals = summarise_refusals(&plan);
-    CleanReport {
-        mode: "dry-run",
-        plan_hash: plan.hash().to_string(),
-        sections,
-        rules: runs,
-        refusals,
-        funnel: FunnelReport {
-            would_remove: preview.would_remove(),
-            skipped: preview.skipped,
-            failed: preview.failed,
-            bytes: preview.removed_bytes,
-            skip_codes: preview
-                .skip_codes()
-                .into_iter()
-                .map(|(code, count)| SkipCode { code, count })
-                .collect(),
+    Built {
+        report: CleanReport {
+            mode: if mode.is_dry_run() {
+                "dry-run"
+            } else {
+                "apply"
+            },
+            plan_hash: plan.hash().to_string(),
+            sections,
+            rules: runs,
+            refusals,
+            funnel: FunnelReport::default(),
+            log: None,
+            totals,
+            notes,
         },
-        totals,
-        notes,
+        plan,
     }
+}
+
+fn touches_copy_on_write(roots: &[PathBuf], mounts: &MountTable) -> bool {
+    roots.iter().any(|root| {
+        mounts
+            .find(root)
+            .map(|mount| mount.fstype.is_cow())
+            .unwrap_or(false)
+    })
 }
 
 fn skip_reason(rule: &Rule, xdg: &Xdg) -> Option<Status> {
@@ -652,7 +828,11 @@ fn summarise_sections(runs: &[RuleRun]) -> Vec<SectionRun> {
 
 fn render(report: &CleanReport, verbose: u8) -> String {
     let mut out = String::new();
-    out.push_str("sweep clean — dry run, nothing is deleted\n\n");
+    if report.mode == "dry-run" {
+        out.push_str("sweep clean — dry run, nothing is deleted\n\n");
+    } else {
+        out.push_str("sweep clean — applying the plan, removals are permanent\n\n");
+    }
 
     out.push_str(&format!(
         "  {:<18} {:>5} {:>7} {:>9} {:>10}\n",
@@ -687,6 +867,31 @@ fn render(report: &CleanReport, verbose: u8) -> String {
         "  {} of {} rules planned something, {report_only} reported only, {} were skipped\n",
         report.totals.planned, report.totals.rules, report.totals.skipped
     ));
+
+    // The outcome goes above the reference material. A user who typed `clean`
+    // wants to know what happened before they want the list of rules whose tools
+    // are not installed on this machine.
+    if report.mode != "dry-run" && report.totals.items > 0 {
+        out.push_str(&format!(
+            "\n  Removed {} of {} planned items, {} accounted.\n",
+            report.funnel.removed,
+            report.totals.items,
+            human_bytes(report.funnel.bytes)
+        ));
+        if report.funnel.failed > 0 {
+            out.push_str(&format!(
+                "  {} items failed at the syscall and were left in place; the log has the \
+                 reason for each.\n",
+                report.funnel.failed
+            ));
+        }
+        if let Some(log) = &report.log {
+            out.push_str(&format!(
+                "  Logged to {} (session {}).\n",
+                log.path, log.session
+            ));
+        }
+    }
 
     if verbose > 0 {
         out.push_str("\n  per rule\n");
@@ -756,9 +961,10 @@ fn render(report: &CleanReport, verbose: u8) -> String {
 
     if report.totals.items == 0 {
         out.push_str("\n  Nothing to remove. Run `sweep rules list` to see the catalog.\n");
-    } else {
+    } else if report.mode == "dry-run" {
         out.push_str(&format!(
-            "\n  Preview only: {} items, {} would be removed permanently.\n  Applying deletions arrives in M3.\n",
+            "\n  Preview only: {} items, {} would be removed permanently.\n  \
+             Nothing was deleted. Run `sweep clean` to apply this plan.\n",
             report.funnel.would_remove,
             human_bytes(report.funnel.bytes)
         ));
@@ -825,7 +1031,11 @@ mod tests {
             .expect("rule pack loads");
         let mounts = MountTable::load().expect("mounts");
         let probe = RealProbe::new().expect("probe").with_open_scan();
-        build(&set, &xdg, &probe, &mounts, &[], limits)
+        let Built { plan, mut report } =
+            build(&set, &xdg, &probe, &mounts, &[], limits, Mode::DryRun);
+        let preview = funnel::apply(&plan, &probe, Mode::DryRun, "clean", None);
+        report.funnel = FunnelReport::of(&preview, Mode::DryRun);
+        report
     }
 
     fn single_rule(id: &str, kind: &str, root: &Path, keep_days: u32) -> String {
@@ -1100,6 +1310,48 @@ privilege = "user"
         assert_eq!(run.status, Status::ReportOnly);
         assert_eq!(report.totals.items, 0);
         assert_eq!(report.funnel.would_remove, 0);
+    }
+
+    #[test]
+    fn planning_is_read_only_in_both_modes_and_yields_the_same_plan() {
+        let temp = tree(&[
+            ("cache/app/old.bin", "old"),
+            ("cache/app/nested/older.bin", "older"),
+        ]);
+        let root = temp.path().join("cache/app");
+        for path in [
+            root.join("old.bin"),
+            root.join("nested/older.bin"),
+            root.join("nested"),
+        ] {
+            age(&path, 90);
+        }
+        age(&root, 90);
+
+        let body = single_rule("test.app", "dir-sweep", &root, 0);
+        let xdg = xdg_at(temp.path());
+        let mounts = MountTable::load().expect("mounts");
+        let probe = RealProbe::new().expect("probe").with_open_scan();
+        let set = || {
+            RuleSet::from_sources(&[sweep_core::rules::Source::new("test.toml", &body)], &xdg)
+                .expect("rule pack loads")
+        };
+        let limits = Limits::default();
+
+        let dry = build(&set(), &xdg, &probe, &mounts, &[], &limits, Mode::DryRun);
+        let apply = build(&set(), &xdg, &probe, &mounts, &[], &limits, Mode::Apply);
+
+        // The preview and the run must describe the same plan: a different hash
+        // would mean the confirmation prompt asked about something else.
+        assert_eq!(dry.report.plan_hash, apply.report.plan_hash);
+        assert_eq!(dry.plan.len(), apply.plan.len());
+        assert_eq!(dry.report.mode, "dry-run");
+        assert_eq!(apply.report.mode, "apply");
+        assert_eq!(
+            apply.report.funnel.removed, 0,
+            "planning must not run the funnel"
+        );
+        assert!(root.join("old.bin").exists(), "planning must not delete");
     }
 
     #[test]

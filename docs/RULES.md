@@ -208,20 +208,29 @@ sweep rules list --json      # the same data as one document
 sweep rules verify           # compile built-ins + overlay and report every error
 sweep clean --dry-run        # the plan, with per-section and per-rule detail
 sweep clean --dry-run --only dev-tools
+sweep clean                  # plan, ask once, delete through the funnel
+sweep clean --yes            # plan and delete; the form a script can use
 ```
 
 | Exit code | Meaning |
 |---|---|
 | 0 | the command did what it says |
-| 1 | output could not be produced (serialisation) |
+| 1 | an applied run hit a syscall failure (the log has the reason per item), or the report could not be serialised |
 | 2 | usage error: unknown command, flag or section |
 | 3 | the catalog did not compile; the reason is printed, and `--json` carries it |
-| 4 | the command is not implemented in this build |
+| 4 | reserved for commands a later milestone wires up |
+| 5 | the run was not confirmed; nothing was deleted and nothing was recorded |
 | 78 | this environment cannot run sweep (`$HOME` is not usable, or the process is root) |
 
-`sweep clean` without `--dry-run` refuses with exit 4 and says so. It does not
-silently preview: a user who typed `clean` meant to delete something, and doing
-something else while reporting success is worse than doing nothing.
+`--yes` and `--dry-run` together are a usage error: they ask for opposite
+things, and guessing which one wins is how a preview turns into a deletion. A
+run with neither asks on the terminal and refuses on a pipe, naming `--yes`, so
+an unanswered question is never an implied yes.
+
+A confirmed run records one row per planned item in
+`~/.local/state/sweep/operations.jsonl` (`REMOVED`, `SKIPPED` with a reason code,
+or `FAILED`) and reports the plan hash it applied. A dry run, a declined prompt,
+and a plan with nothing in it write no log at all.
 
 ## Adding a rule
 

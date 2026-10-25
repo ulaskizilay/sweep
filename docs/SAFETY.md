@@ -230,14 +230,16 @@ ancestry frees nothing and can destroy a rollback point. Size and mtime cannot
 prove a snapshot is inactive, so the whole family is refused rather than guessed
 about.
 
-**Why freed ≠ reclaimed.** On CoW filesystems the bytes accounted for by
+**Why freed ≠ accounted.** On CoW filesystems the bytes accounted for by
 `st_blocks` may be shared with snapshots or reflinks, so deleting a file can
-free nothing while `st_blocks` still reports a size. The primitives for telling
-the two apart exist — `statvfs_space` for the real delta and
-`Meta::accounted_bytes` for the per-item claim — but **no report consumes them
-yet**: the summary that would print both numbers arrives with the first cleanup
-section in M3. Until then sweep reports no space figures at all, which is the
-only honest option available.
+free nothing while `st_blocks` still reports a size. Reports therefore say
+**accounted**, never "freed", and add an explicit note when a rule root sits on
+a copy-on-write filesystem.
+
+`statvfs_space` and `Meta::accounted_bytes` exist for telling the two apart
+without guessing, but the delta is not consumed yet: printing it next to the
+accounted figure, per mount, is the remaining gap. Until then the number in the
+summary is a sum of inode sizes and is labelled as one.
 
 **Unknown paths fail closed.** `MountTable::find` matching nothing yields
 `unknown_mount`. This happens with a truncated `mountinfo` or a path outside
@@ -251,8 +253,15 @@ every visible mount, and neither is a reason to proceed.
   and a plan's `plan_hash` is identical in both modes.
   `dry_run_parity_on_a_real_tree` builds a plan in two different insertion
   orders, asserts one hash, previews, then applies and checks the removed set
-  matches. The `--dry-run` *flag* does not exist yet: no command deletes
-  anything, so there is nothing for it to preview. It lands with `clean` in M2.
+  matches. `clean` keeps that contract end to end: the same tree produces the
+  same hash in both modes, and `--yes` is refused *together with* `--dry-run`
+  rather than letting one flag silently win over the other.
+* **Planning and deleting are separated by consent.** `clean` builds and
+  validates the whole plan before asking anything. The prompt is skipped with
+  `--yes`, refused when stdin is not a terminal, and a declined run writes
+  nothing at all — no `unlinkat`, no log row, no state directory. Every item is
+  re-checked against its planned `dev`/`ino` at the sink, so a tree that changed
+  while the question was on screen is skipped rather than removed.
 * **The operation log is append-only JSONL**, one record per line, written with a
   single `write_all`. JSON gives exact fidelity: a path containing a newline is
   stored as `\n` and cannot forge a second record. `0x7f` is escaped explicitly
@@ -341,15 +350,15 @@ refusal with a named pid: the user can check.
 ### R5. Hardlinks are not resolved
 
 Sweep does not currently refuse `nlink > 1`. Removing one link does not free the
-data, so the *safety* impact is nil, but the *reported* byte count over-states
+data, so the *safety* impact is nil, but the *accounted* byte count over-states
 what was reclaimed. This is an accounting gap, not a deletion risk.
 
 ### R6. CoW reflinks
 
-Summed `st_blocks` over-counts shared extents on btrfs/XFS-reflink. The plan is
-to print the `statvfs` delta alongside it rather than instead of it; until that
-summary exists (M3), sweep reports no space figures, so nothing is over-stated
-and nothing is claimed.
+Summed `st_blocks` over-counts shared extents on btrfs/XFS-reflink. Reports label
+the figure **accounted** and note the CoW caveat when a rule root is on such a
+filesystem, so nothing is claimed as freed. Printing the `statvfs` delta next to
+it — rather than instead of it — is the remaining accounting task.
 
 ---
 

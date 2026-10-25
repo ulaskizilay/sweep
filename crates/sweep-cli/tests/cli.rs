@@ -460,26 +460,270 @@ fn a_broken_user_overlay_is_refused_by_rules_and_by_clean() {
 
 // ----------------------------------------------------------------- clean ---
 
+/// One row per line from the operation log, parsed.
+fn log_rows(home: &Path) -> Vec<serde_json::Value> {
+    let path = home.join(".local/state/sweep/operations.jsonl");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    raw.lines()
+        .map(|line| serde_json::from_str(line).expect("one JSON record per line"))
+        .collect()
+}
+
+fn firefox_cache(home: &Path) -> PathBuf {
+    home.join(".cache/mozilla/firefox/profile/cache2/entries/blob")
+}
+
 #[test]
-fn clean_without_dry_run_refuses_and_names_the_next_step() {
+fn clean_without_yes_on_a_pipe_declines_and_writes_nothing() {
     let home = home();
+    let blob = firefox_cache(home.path());
+    write(
+        home.path(),
+        ".cache/mozilla/firefox/profile/cache2/entries/blob",
+        "cache body",
+    );
+    let before = snapshot(home.path());
+
+    // `Command::output` gives the child a null stdin, which is the case a cron
+    // job hits: there is nobody to answer the prompt.
     let output = run_in(home.path(), &["clean"]);
     assert_eq!(
         output.code,
-        Some(4),
-        "an unimplemented apply is exit 4, not a silent preview; stderr: {}",
+        Some(5),
+        "a declined run is exit 5, not a silent preview; stderr: {}",
         output.stderr
     );
-    assert!(output.stderr.contains("M3"), "{:?}", output.stderr);
     assert!(
-        output.stderr.contains("--dry-run"),
-        "the refusal must name the flag that works: {:?}",
+        output.stderr.contains("--yes"),
+        "the refusal must name the flag that turns the question off: {:?}",
+        output.stderr
+    );
+    assert!(
+        output.stderr.contains("nothing was removed"),
+        "the refusal must say what did not happen: {:?}",
         output.stderr
     );
     assert!(
         output.stdout.is_empty(),
-        "a refusal must not look like a report: {:?}",
+        "a declined run must not print a report: {:?}",
         output.stdout
+    );
+
+    assert_eq!(
+        before,
+        snapshot(home.path()),
+        "a declined run must not create, remove or move anything below HOME"
+    );
+    assert!(blob.exists(), "the planned file is still there");
+    assert!(
+        !home.path().join(".local/state/sweep").exists(),
+        "a declined run must not create the state directory"
+    );
+}
+
+#[test]
+fn clean_yes_removes_only_planned_paths_and_logs_them() {
+    let home = home();
+    let blob = firefox_cache(home.path());
+    write(
+        home.path(),
+        ".cache/mozilla/firefox/profile/cache2/entries/blob",
+        "cache body",
+    );
+    // Profile data sits outside the cache root; a cache sweep must not see it.
+    write(
+        home.path(),
+        ".mozilla/firefox/profile/bookmarks.sqlite",
+        "precious",
+    );
+
+    let before = snapshot(home.path());
+    let output = run_in(home.path(), &["clean", "--yes"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    assert!(
+        output.stdout.contains("applying the plan"),
+        "the header must state the mode:\n{}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("operations.jsonl"),
+        "the report must name the log it wrote:\n{}",
+        output.stdout
+    );
+
+    assert!(!blob.exists(), "the planned file must be gone");
+    assert!(
+        home.path()
+            .join(".mozilla/firefox/profile/bookmarks.sqlite")
+            .exists(),
+        "profile data is not a cache"
+    );
+    assert!(
+        home.path().join(".cache/mozilla/firefox").exists(),
+        "a dir-sweep root stays; only its entries go"
+    );
+
+    let after = snapshot(home.path());
+    let gone: BTreeSet<PathBuf> = before.difference(&after).cloned().collect();
+    assert!(!gone.is_empty(), "the run must have removed something");
+
+    let rows = log_rows(home.path());
+    assert!(!rows.is_empty(), "an applied run must log every decision");
+    let mut removed = BTreeSet::new();
+    for row in &rows {
+        assert_eq!(row["cmd"], "clean");
+        assert_eq!(
+            row["session"].as_str().map(|s| s.starts_with("clean-")),
+            Some(true),
+            "the session is named after the command: {row}"
+        );
+        assert!(
+            matches!(
+                row["action"].as_str(),
+                Some("REMOVED") | Some("SKIPPED") | Some("FAILED")
+            ),
+            "an applied run never writes WOULD_REMOVE: {row}"
+        );
+        if row["action"] == "REMOVED" {
+            removed.insert(PathBuf::from(row["path"].as_str().expect("path")));
+        }
+    }
+    assert_eq!(
+        gone, removed,
+        "every path that vanished must have one REMOVED row, and nothing else"
+    );
+    assert!(
+        removed.contains(&blob),
+        "the cache blob must be in the ledger: {removed:?}"
+    );
+}
+
+#[test]
+fn clean_dry_run_and_apply_describe_the_same_plan() {
+    let home = home();
+    write(
+        home.path(),
+        ".cache/mozilla/firefox/profile/cache2/entries/blob",
+        "cache body",
+    );
+
+    let preview = run_in(home.path(), &["clean", "--dry-run", "--json"]);
+    assert_eq!(preview.code, Some(0), "stderr: {}", preview.stderr);
+    let preview: serde_json::Value = serde_json::from_str(&preview.stdout).expect("one document");
+    assert_eq!(preview["mode"], "dry-run");
+    assert_eq!(preview["log"], serde_json::Value::Null);
+    assert_eq!(
+        preview["funnel"]["removed"], 0,
+        "a dry run removes nothing: {preview}"
+    );
+    let would = preview["funnel"]["would_remove"].as_u64().unwrap_or(0);
+    assert!(would > 0, "the fixture must plan something: {preview}");
+
+    let applied = run_in(home.path(), &["clean", "--yes", "--json"]);
+    assert_eq!(applied.code, Some(0), "stderr: {}", applied.stderr);
+    let applied: serde_json::Value = serde_json::from_str(&applied.stdout).expect("one document");
+    assert_eq!(applied["mode"], "apply");
+    assert_eq!(
+        applied["plan_hash"], preview["plan_hash"],
+        "the prompt must describe exactly the plan that gets applied"
+    );
+    assert_eq!(
+        applied["funnel"]["would_remove"], 0,
+        "an applied run reports removals, not intentions: {applied}"
+    );
+    assert_eq!(
+        applied["funnel"]["removed"].as_u64(),
+        Some(would),
+        "every previewed item must be removed or accounted for"
+    );
+    assert_eq!(
+        applied["log"]["session"]
+            .as_str()
+            .map(|session| session.starts_with("clean-")),
+        Some(true),
+        "the applied run names its session: {applied}"
+    );
+    assert!(
+        applied["log"]["path"]
+            .as_str()
+            .unwrap_or_default()
+            .ends_with("operations.jsonl"),
+        "the report names the log file: {applied}"
+    );
+}
+
+const TOOL_CACHE_OVERLAY: &str = r#"
+[[rule]]
+id = "test.tool-cache"
+section = "dev-tools"
+kind = "tool-cache"
+root = "{home}/.cache/sweep-tool-test"
+evidence = "a fixture directory that exists only in this test"
+recoverable = true
+keep_days = 0
+privilege = "user"
+"#;
+
+#[test]
+fn a_tool_cache_rule_removes_its_root_and_nothing_beside_it() {
+    let home = home();
+    write(
+        home.path(),
+        ".config/sweep/rules.d/50-tool-cache.toml",
+        TOOL_CACHE_OVERLAY,
+    );
+    write(
+        home.path(),
+        ".cache/sweep-tool-test/v1/objects/blob",
+        "built artifact",
+    );
+    write(home.path(), ".cache/keep-me.txt", "someone else's file");
+
+    let root = home.path().join(".cache/sweep-tool-test");
+    let output = run_in(home.path(), &["clean", "--yes", "--only", "dev-tools"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    assert!(
+        !root.exists(),
+        "a tool cache owns its directory and removes it: {}",
+        output.stdout
+    );
+    assert!(
+        home.path().join(".cache/keep-me.txt").exists(),
+        "a tool-cache rule must not widen to its parent"
+    );
+}
+
+#[test]
+fn clean_yes_with_nothing_to_plan_exits_zero_and_writes_no_log() {
+    let home = home();
+    let output = run_in(home.path(), &["clean", "--yes"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    assert!(
+        output.stdout.contains("Nothing to remove"),
+        "an empty plan needs no confirmation:\n{}",
+        output.stdout
+    );
+    assert!(
+        !home.path().join(".local/state/sweep").exists(),
+        "a run that removed nothing must not create a log for it"
+    );
+}
+
+#[test]
+fn yes_with_dry_run_is_a_usage_error() {
+    let home = home();
+    let output = run_in(home.path(), &["clean", "--dry-run", "--yes"]);
+    assert_eq!(
+        output.code,
+        Some(2),
+        "two contradictory modes are a usage error; stderr: {}",
+        output.stderr
+    );
+    assert!(
+        output.stderr.contains("--dry-run") || output.stderr.contains("--yes"),
+        "the error must name the conflicting flags: {:?}",
+        output.stderr
     );
 }
 

@@ -48,11 +48,15 @@ enum Command {
         command: RulesCommand,
     },
 
-    /// Preview what could be reclaimed. This build is read-only.
+    /// Reclaim cache, log and build space through the validated plan.
     Clean {
-        /// Show the plan without writing anything. Required in M2.
-        #[arg(long)]
+        /// Show the plan and stop: no deletion, no operation-log entry.
+        #[arg(long, conflicts_with = "yes")]
         dry_run: bool,
+
+        /// Apply the plan without asking. Required when stdin is not a terminal.
+        #[arg(long)]
+        yes: bool,
 
         /// Restrict the run to one or more sections (`--only dev-tools`).
         #[arg(long, value_name = "SECTION")]
@@ -69,10 +73,20 @@ enum RulesCommand {
 }
 
 /// Exit code for a command that exists but is not implemented in this build.
+///
+/// Held for the commands the later milestones wire up; nothing returns it today.
+#[allow(dead_code)]
 pub(crate) const EXIT_NOT_IMPLEMENTED: u8 = 4;
 
 /// Exit code for a rule catalog that failed to load.
 pub(crate) const EXIT_INVALID_RULES: u8 = 3;
+
+/// Exit code for a run the user did not confirm.
+///
+/// Separate from 1 on purpose: "you said no" and "the syscall failed" are
+/// different outcomes, and only the second one means the machine is in a state
+/// worth investigating.
+pub(crate) const EXIT_DECLINED: u8 = 5;
 
 /// Exit code for a refusal that is about the environment, not the command line.
 ///
@@ -98,7 +112,9 @@ fn main() -> ExitCode {
             RulesCommand::List => rules::list(cli.json, cli.verbose),
             RulesCommand::Verify => rules::verify(cli.json, cli.verbose),
         },
-        Command::Clean { dry_run, only } => clean::run(cli.json, cli.verbose, &only, dry_run),
+        Command::Clean { dry_run, yes, only } => {
+            clean::run(cli.json, cli.verbose, &only, dry_run, yes)
+        }
     }
 }
 

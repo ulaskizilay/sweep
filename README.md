@@ -19,18 +19,20 @@
 
 ## Status
 
-> **Pre-alpha.** `doctor`, `rules` and `clean --dry-run` work. `clean` refuses
-> to run without `--dry-run`, so **sweep still cannot delete anything.** What
-> M2 proves is the other half: 106 rules across fifteen sections compile,
-> produce a plan, and pass that plan through the same validation the real run
-> will use.
+> **Pre-alpha.** `doctor`, `rules` and `clean` work. `clean` prints the plan,
+> asks once, then deletes through the single funnel and writes one operation-log
+> row per decision; `--dry-run` stops before the question and writes nothing at
+> all. What M2 proved is the other half: 106 rules across fifteen sections
+> compile, produce a plan, and pass that plan through the same validation the
+> real run uses.
 
 | Milestone | Scope | State |
 |---|---|---|
 | M0 | workspace, CI, `doctor` | done |
 | M1 | path policy, plan, deletion funnel, operation log, filesystem facts | done |
 | M2 | TOML rule engine, `rules list\|verify`, `clean --dry-run` | done |
-| M3 | applying the plan: user caches, dev tools, browsers, app caches, model caches | next |
+| M3a | applying the plan: confirmation gate, operation log, exit codes | done |
+| M3b | model caches: Hugging Face blobs, torch checkpoints | next |
 | M4 | system section, privilege boundary | planned |
 | M5 | `purge`, `installer`, large files, `aur` | planned |
 | M6 | TUI: `analyze`, `status` | planned |
@@ -159,15 +161,24 @@ cargo build --release
 | `sweep doctor` | what sweep can see: mounts, base directories, capabilities; `--json` for scripts | works |
 | `sweep rules list` / `verify` | the catalog, and whether built-ins plus your overlay compile | works |
 | `sweep clean --dry-run` | the plan, per section and per rule, with the reason every skip happened | works |
-| `sweep clean` | reclaim cache, log and build space | M3 |
+| `sweep clean` | reclaim cache, log and build space; asks once, then deletes | works |
 | `sweep purge` / `installer` | project artifacts, installer leftovers | M5 |
 | `sweep analyze` / `status` | disk explorer, health summary | M6 |
 | `sweep uninstall` / `optimize` / `history` | package removal, maintenance, past actions | M7 |
 | `sweep aur` | AUR package cleanup | M5 |
 
-`sweep clean` without `--dry-run` exits 4 and says which milestone it is
-waiting for. That is a refusal, not a preview: reporting success while doing
-something else is the failure mode worth avoiding.
+`sweep clean` is two phases. It plans — load the catalog, scan the roots,
+validate every candidate — and only then asks. The question is skipped with
+`--yes`, and a run whose stdin is not a terminal refuses without it (exit 5) and
+deletes nothing, so a cron job cannot answer a prompt with its own pipe. The
+applied run writes one row per decision to
+`~/.local/state/sweep/operations.jsonl` under a `clean-<unix>` session and exits
+1 if a syscall failed, with the reason recorded for each item.
+
+Sizes are the sum of `st_blocks`, which is what the inodes account for. On a
+copy-on-write filesystem the space actually returned can be smaller when extents
+are shared with a snapshot or a reflink, and the report says so when a rule root
+sits on one.
 
 `sweep doctor` is also the answer to "why did it skip everything?", so a bug
 report can be its output pasted whole. `sweep rules list --verbose` answers the
