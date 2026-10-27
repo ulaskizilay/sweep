@@ -31,14 +31,17 @@ pub mod meta;
 pub mod model_cache;
 pub mod oplog;
 pub mod paths;
+pub mod pkg_cache;
 pub mod plan;
 pub mod policy;
 pub mod privilege;
 pub mod probe;
 pub mod rules;
 pub mod scan;
+pub mod selection;
 pub mod sys;
 pub mod validate;
+pub mod version;
 
 pub use fs_facts::{FsFacts, FsType, MountInfo, MountOptions, MountTable};
 pub use funnel::{apply, ItemResult, Mode, Outcome, Report};

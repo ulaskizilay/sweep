@@ -33,7 +33,9 @@ use crate::funnel::{self, Mode, Outcome};
 use crate::oplog::Action;
 use crate::plan::{Plan, RuleId};
 use crate::probe::FsProbe;
-use crate::rules::{builtin, Kind, Privilege, RuleSet, Section, Source};
+use crate::rules::{builtin, Kind, Privilege, Rule, RuleSet, Section, Source};
+use crate::scan::Limits;
+use crate::selection::Selection;
 use crate::validate::{AllowedRoot, Policy, Reason, ValidateCtx};
 use crate::Xdg;
 
@@ -170,7 +172,18 @@ pub fn system_rule_ids() -> BTreeSet<String> {
                 && rule.section == Section::System
                 && rule.privilege == Privilege::Root
                 && rule.kind.deletes()
-                && matches!(rule.kind, Kind::DirSweep | Kind::DirAge | Kind::FilePattern)
+                // The kinds the child knows how to re-select. A new kind is not
+                // accepted here by default: the list is the place where someone
+                // decides whether the child can judge it on its own.
+                && matches!(
+                    rule.kind,
+                    Kind::DirSweep
+                        | Kind::DirAge
+                        | Kind::FilePattern
+                        | Kind::ToolCache
+                        | Kind::HfCache
+                        | Kind::PkgCache
+                )
                 && is_literal_root(rule.root.raw())
         })
         .map(|rule| rule.id.to_string())
@@ -210,7 +223,19 @@ pub fn apply(request: &Request, probe: &dyn FsProbe) -> io::Result<Reply> {
             "no literal system roots in the compiled catalog",
         ));
     }
-    apply_with(request, probe, &roots, &system_rule_ids())
+    let set = system_pack().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the compiled system pack does not compile",
+        )
+    })?;
+    let catalog: Vec<Rule> = set
+        .rules()
+        .iter()
+        .filter(|rule| system_rule_ids().contains(rule.id.as_str()))
+        .cloned()
+        .collect();
+    apply_with(request, probe, &roots, &catalog)
 }
 
 /// The part with no catalog in it, so a fixture root can exercise the boundary.
@@ -222,7 +247,7 @@ pub fn apply_with(
     request: &Request,
     probe: &dyn FsProbe,
     roots: &[AllowedRoot],
-    known: &BTreeSet<String>,
+    catalog: &[Rule],
 ) -> io::Result<Reply> {
     let xdg = synthetic_xdg().ok_or_else(|| {
         io::Error::new(io::ErrorKind::Unsupported, "no usable HOME for validation")
@@ -237,13 +262,29 @@ pub fn apply_with(
         policy: Policy::default(),
     };
 
+    // Resolve every named rule before touching a path, then derive each rule's
+    // selection once. Deriving per item would re-walk a cache for every path in
+    // it; deriving from the request instead of from the rule would defeat the
+    // point of the check.
+    let mut named: std::collections::BTreeMap<&str, &Rule> = std::collections::BTreeMap::new();
     for item in &request.items {
-        if !known.contains(&item.rule) {
+        let Some(rule) = catalog.iter().find(|rule| rule.id.as_str() == item.rule) else {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!("rule {} is not a compiled system rule", item.rule),
             ));
-        }
+        };
+        named.insert(item.rule.as_str(), rule);
+    }
+
+    let now = funnel::now_unix();
+    let limits = Limits::default();
+    let selections: std::collections::BTreeMap<&str, Selection> = named
+        .iter()
+        .map(|(id, rule)| (*id, Selection::derive(rule, &xdg, now, &limits, probe)))
+        .collect();
+
+    for item in &request.items {
         let path = match decode_path(&item.path_hex) {
             Some(path) => path,
             None => {
@@ -294,8 +335,27 @@ pub fn apply_with(
             }
         }
 
+        // Validation first, then selection. A path that is a symlink or is owned
+        // by someone else has a more useful reason than "not selected", and the
+        // selection set was derived from a walk that never includes those. What
+        // only the rule can answer is the second gate: is this one of the files
+        // the rule names?
         match plan.push(&path, &rule, &ctx) {
-            Ok(_) => {}
+            Ok(_) => {
+                let selected = selections
+                    .get(item.rule.as_str())
+                    .is_some_and(|selection| selection.admits(&path));
+                if !selected {
+                    plan.forget(&path);
+                    reply.results.push(refusal(
+                        item,
+                        &path,
+                        Action::Skipped,
+                        Reason::NotSelected,
+                        None,
+                    ));
+                }
+            }
             Err(reason) => {
                 reply
                     .results
@@ -592,13 +652,34 @@ mod tests {
         }
     }
 
-    fn known(ids: &[&str]) -> BTreeSet<String> {
-        ids.iter().map(|id| id.to_string()).collect()
+    /// A one-rule catalog, compiled the way a pack compiles one.
+    ///
+    /// The child needs the rule itself, not just its id: the selection is
+    /// re-derived from the rule, and an id alone cannot say which files it names.
+    fn catalog(rule: &str, root: &Path) -> Vec<Rule> {
+        let body = format!(
+            r#"
+[[rule]]
+id = "{rule}"
+section = "system"
+kind = "dir-sweep"
+root = "{}"
+evidence = "fixture"
+privilege = "root"
+recoverable = true
+"#,
+            root.display()
+        );
+        let xdg = synthetic_xdg().expect("synthetic home");
+        RuleSet::from_sources(&[Source::new("fixture", body)], &xdg)
+            .expect("the fixture rule compiles")
+            .rules()
+            .to_vec()
     }
 
-    fn run(request: &Request, roots: &[AllowedRoot], ids: &[&str]) -> Reply {
+    fn run(request: &Request, roots: &[AllowedRoot], rules: &[Rule]) -> Reply {
         let probe = RealProbe::new().expect("probe").with_open_scan();
-        apply_with(request, &probe, roots, &known(ids)).expect("the request itself is valid")
+        apply_with(request, &probe, roots, rules).expect("the request itself is valid")
     }
 
     #[test]
@@ -628,7 +709,7 @@ mod tests {
         let reply = run(
             &request(vec![item("system.test", &outside)]),
             &[AllowedRoot::new(&root).owned_by_root()],
-            &["system.test"],
+            &catalog("system.test", &root),
         );
         assert_eq!(reply.results.len(), 1);
         assert_eq!(reply.results[0].action, Action::Skipped);
@@ -640,6 +721,79 @@ mod tests {
     }
 
     #[test]
+    fn a_path_inside_the_root_that_the_rule_does_not_name_is_refused() {
+        // The confused-deputy case this check exists for. `/var/log` is a rule
+        // root and `wtmp` is inside it; only the pattern knows which files the
+        // rule meant. A parent that sent `wtmp` - or a rule whose parent-side
+        // filtering was wrong - must not be able to delete it through the child.
+        use std::fs::{File, FileTimes};
+        use std::time::{Duration, SystemTime};
+
+        let temp = fixture(&["root/boot.log.1", "root/wtmp"]);
+        let root = temp.path().join("root");
+        let when = SystemTime::now() - Duration::from_secs(30 * 86_400);
+        for name in ["boot.log.1", "wtmp"] {
+            File::open(root.join(name))
+                .expect("open")
+                .set_times(FileTimes::new().set_modified(when))
+                .expect("set mtime");
+        }
+
+        let body = format!(
+            r#"
+[[rule]]
+id = "system.test.log"
+section = "system"
+kind = "file-pattern"
+root = "{}"
+evidence = "fixture"
+privilege = "root"
+pattern = "*.log.*"
+keep_days = 7
+"#,
+            root.display()
+        );
+        let xdg = synthetic_xdg().expect("synthetic home");
+        let rules = RuleSet::from_sources(&[Source::new("fixture", body)], &xdg)
+            .expect("the fixture rule compiles")
+            .rules()
+            .to_vec();
+
+        // `AllowedRoot::new` rather than `owned_by_root`: this test has to reach
+        // the selection gate, and the ownership check would refuse first.
+        let reply = run(
+            &request(vec![
+                item("system.test.log", &root.join("boot.log.1")),
+                item("system.test.log", &root.join("wtmp")),
+            ]),
+            &[AllowedRoot::new(&root)],
+            &rules,
+        );
+
+        // The reply lists refusals first and funnel outcomes second, so match on
+        // the path rather than the position.
+        assert_eq!(reply.results.len(), 2);
+        let result_for = |name: &str| {
+            reply
+                .results
+                .iter()
+                .find(|result| result.path.ends_with(name))
+                .unwrap_or_else(|| panic!("no result for {name}: {:?}", reply.results))
+        };
+        assert_eq!(result_for("boot.log.1").action, Action::Removed);
+        assert!(
+            !root.join("boot.log.1").exists(),
+            "the positive control: the rule's own pattern is removed"
+        );
+        assert_eq!(result_for("wtmp").action, Action::Skipped);
+        assert_eq!(result_for("wtmp").code.as_deref(), Some("not_selected"));
+        assert!(
+            root.join("wtmp").exists(),
+            "a path the rule never selected survives the child"
+        );
+    }
+
+    #[test]
     fn a_rule_the_child_does_not_know_refuses_the_whole_request() {
         let temp = fixture(&["root/victim"]);
         let root = temp.path().join("root");
@@ -648,7 +802,7 @@ mod tests {
             &request(vec![item("user.made.up", &temp.path().join("root/victim"))]),
             &probe,
             &[AllowedRoot::new(&root).owned_by_root()],
-            &known(&["system.test"]),
+            &catalog("system.test", &root),
         )
         .expect_err("an invented rule id is not a request to honour");
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
@@ -665,7 +819,7 @@ mod tests {
         let reply = run(
             &request(vec![stale]),
             &[AllowedRoot::new(&root).owned_by_root()],
-            &["system.test"],
+            &catalog("system.test", &root),
         );
         assert_eq!(reply.results[0].code.as_deref(), Some("race_changed"));
         assert!(victim.exists(), "the replacement is not what was planned");
@@ -681,7 +835,7 @@ mod tests {
         let reply = run(
             &request(vec![item("system.test", &link)]),
             &[AllowedRoot::new(&root).owned_by_root()],
-            &["system.test"],
+            &catalog("system.test", &root),
         );
         assert_eq!(reply.results[0].code.as_deref(), Some("leaf_symlink"));
         assert!(link.symlink_metadata().is_ok());
@@ -698,7 +852,7 @@ mod tests {
         let reply = run(
             &request(vec![item("system.test", &victim)]),
             &[AllowedRoot::new(&root).owned_by_root()],
-            &["system.test"],
+            &catalog("system.test", &root),
         );
         assert_eq!(reply.results[0].code.as_deref(), Some("foreign_owner"));
         assert!(victim.exists());

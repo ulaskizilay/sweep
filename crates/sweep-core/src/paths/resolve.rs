@@ -74,6 +74,21 @@ pub fn depth(path: &Path) -> usize {
         .count()
 }
 
+/// The first named component of a relative path, ignoring the root marker.
+///
+/// `a/b/c` gives `a`, and `/a` gives `None`: an absolute path has no component
+/// below a rule root, so it cannot name a top-level subtree of one. Used to
+/// group a walk by its top-level entries for age decisions, and by
+/// [`crate::selection`] to re-derive the same groups as the elevated child.
+pub fn first_component(path: &Path) -> Option<PathBuf> {
+    path.components()
+        .next()
+        .and_then(|component| match component {
+            Component::Normal(name) => Some(PathBuf::from(name)),
+            _ => None,
+        })
+}
+
 /// Returns the ancestors of `path`, deepest first, excluding the path itself.
 ///
 /// Used by the symlink-ancestor guard, which must inspect every parent and not

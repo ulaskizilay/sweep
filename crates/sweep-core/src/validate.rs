@@ -136,11 +136,19 @@ pub enum Reason {
     ForeignOwner(u32),
     StickyDir,
     Immutable,
-    OpenByProcess { pid: u32, name: String },
+    OpenByProcess {
+        pid: u32,
+        name: String,
+    },
     RaceChanged,
     DirectoryNotEmpty,
     ProbeUnknown(String),
     AlreadyGone,
+    /// The path is inside the rule's root but is not one of the entries the rule
+    /// selects: a rotated log the pattern does not name, a package version still
+    /// within the keep count. Reached only by the elevated child, which
+    /// re-derives the selection instead of trusting the request.
+    NotSelected,
 }
 
 impl Reason {
@@ -172,6 +180,7 @@ impl Reason {
             Reason::DirectoryNotEmpty => "directory_not_empty",
             Reason::ProbeUnknown(_) => "probe_unknown",
             Reason::AlreadyGone => "already_gone",
+            Reason::NotSelected => "not_selected",
         }
     }
 
@@ -214,6 +223,9 @@ impl std::fmt::Display for Reason {
             Reason::DirectoryNotEmpty => f.write_str("directory still has children"),
             Reason::ProbeUnknown(detail) => write!(f, "could not verify: {detail}"),
             Reason::AlreadyGone => f.write_str("path was already removed"),
+            Reason::NotSelected => {
+                f.write_str("path is not one the rule selects in its current state")
+            }
         }
     }
 }

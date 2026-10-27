@@ -156,17 +156,21 @@ pub enum Kind {
     /// Remove what a Hugging Face hub cache has left behind: blobs no snapshot
     /// links to, and abandoned `*.incomplete` downloads.
     HfCache,
+    /// Keep the newest N versions of every package in a package-manager cache
+    /// and remove the rest; `keep_days` acts as a recency floor.
+    PkgCache,
     /// Count and describe; never contributes a plan item.
     ReportOnly,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 6] = [
+    pub const ALL: [Kind; 7] = [
         Kind::DirSweep,
         Kind::DirAge,
         Kind::FilePattern,
         Kind::ToolCache,
         Kind::HfCache,
+        Kind::PkgCache,
         Kind::ReportOnly,
     ];
 
@@ -177,6 +181,7 @@ impl Kind {
             Kind::FilePattern => "file-pattern",
             Kind::ToolCache => "tool-cache",
             Kind::HfCache => "hf-cache",
+            Kind::PkgCache => "pkg-cache",
             Kind::ReportOnly => "report-only",
         }
     }
@@ -190,6 +195,7 @@ impl Kind {
             "file-pattern" => Kind::FilePattern,
             "tool-cache" => Kind::ToolCache,
             "hf-cache" => Kind::HfCache,
+            "pkg-cache" => Kind::PkgCache,
             "report-only" => Kind::ReportOnly,
             "if-missing-owner" => {
                 return Err(Some(
@@ -340,6 +346,8 @@ pub struct Rule {
     pub evidence: String,
     pub recoverable: bool,
     pub keep_days: u32,
+    /// How many versions of a package to keep. `Some` only for `pkg-cache`.
+    pub keep_versions: Option<u32>,
     pub requires: Vec<Requirement>,
     pub privilege: Privilege,
     pub exclude: Vec<Pattern>,

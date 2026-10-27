@@ -37,6 +37,8 @@ struct RuleReport {
     kind: &'static str,
     enabled: bool,
     keep_days: u32,
+    /// `Some` only for `kind = "pkg-cache"`: how many versions stay.
+    keep_versions: Option<u32>,
     recoverable: bool,
     privilege: &'static str,
     root: String,
@@ -223,6 +225,7 @@ fn build(set: &RuleSet, xdg: &Xdg) -> ListReport {
             kind: rule.kind.as_str(),
             enabled: rule.enabled,
             keep_days: rule.keep_days,
+            keep_versions: rule.keep_versions,
             recoverable: rule.recoverable,
             privilege: rule.privilege.as_str(),
             root: rule.root.raw().to_string(),
@@ -305,13 +308,17 @@ fn render(report: &ListReport, verbose: u8) -> String {
         } else {
             "on"
         };
-        let retention = if rule.keep_days == 0 {
-            "now".to_string()
-        } else {
-            format!("{}d", rule.keep_days)
+        // The retention column has to show both halves of a `pkg-cache` rule:
+        // "2v" without the age floor, or "7d" without the version count, would
+        // each promise a deletion policy the run does not apply.
+        let retention = match (rule.keep_versions, rule.keep_days) {
+            (Some(versions), 0) => format!("{versions}v"),
+            (Some(versions), days) => format!("{versions}v/{days}d"),
+            (None, 0) => "now".to_string(),
+            (None, days) => format!("{days}d"),
         };
         out.push_str(&format!(
-            "    {:<34} {:<13} {:>4}  {:<4}  {}\n",
+            "    {:<34} {:<13} {:>6}  {:<4}  {}\n",
             rule.id, rule.kind, retention, state, rule.resolved_root
         ));
         if verbose > 0 {

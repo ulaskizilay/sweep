@@ -191,6 +191,18 @@ impl Plan {
         });
     }
 
+    /// Removes an item that was validated and then refused for another reason.
+    ///
+    /// The elevated child validates before it asks whether the rule would have
+    /// selected the path, so that a symlink or an owner mismatch is reported as
+    /// what it is. The item must then leave the plan: an applied plan has no
+    /// second chance to notice it.
+    pub fn forget(&mut self, path: &Path) {
+        self.seen.remove(path);
+        self.items.retain(|item| item.physical != path);
+        self.hash.clear();
+    }
+
     pub fn deny(&mut self, path: &Path, rule: &RuleId, reason: Reason) {
         if self.denied.len() < 10_000 {
             self.denied.push(DeniedItem {

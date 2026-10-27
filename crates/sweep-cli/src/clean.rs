@@ -26,14 +26,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, IsTerminal, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde::Serialize;
 use sweep_core::fs_facts::MountTable;
 use sweep_core::model_cache::{self, Leftover};
 use sweep_core::oplog::{encode_path, rfc3339, Action, Oplog, Record};
-use sweep_core::paths::is_within;
+use sweep_core::paths::{first_component, is_within};
+use sweep_core::pkg_cache;
 use sweep_core::privilege::{self, Elevator, SystemElevator};
 use sweep_core::probe::RealProbe;
 use sweep_core::rules::{Kind, Privilege, Rule, RuleSet, Section};
@@ -1056,6 +1057,9 @@ fn execute(
     if rule.kind == Kind::HfCache {
         return execute_hf(rule, root, probe, ctx, limits, plan, now);
     }
+    if rule.kind == Kind::PkgCache {
+        return execute_pkg(rule, root, probe, ctx, limits, plan, now);
+    }
 
     // Roots another enabled rule owns: the residual cache sweep must not take a
     // target that has a retention policy of its own.
@@ -1136,7 +1140,7 @@ fn execute(
             paths
         }
         Kind::DirAge => age_candidates(rule, &collected, root, now, &mut run),
-        Kind::HfCache => unreachable!("handled before the walk"),
+        Kind::HfCache | Kind::PkgCache => unreachable!("handled before the walk"),
     };
     // Children first is the plan's job (`Plan::finish` sorts deepest-first); the
     // walk already emits post-order, so this stays readable even before sorting.
@@ -1224,6 +1228,98 @@ fn execute_hf(
         run.preserved = found.preserved.clone();
     }
     run.detail = Some(detail);
+
+    let candidates: Vec<PathBuf> = found
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.path)
+        .collect();
+    plan_candidates(plan, ctx, rule, &mut run, candidates);
+
+    if run.items == 0 && run.refused == 0 {
+        run.status = Status::Empty;
+    }
+    run
+}
+
+/// The package cache: retention is a version count, not an age.
+///
+/// `paccache`'s rule is "keep the newest N versions of each package", and that
+/// is the only retention that survives a machine which has not been upgraded in
+/// months: an age cutoff would delete the running kernel's package on exactly
+/// the system where a rollback matters. The ordering is pacman's own `vercmp`,
+/// ported in [`sweep_core::version`], so `1.10` outranks `1.9` and `1.0` outranks
+/// `1.0rc1`.
+///
+/// Selective deletion inside this root is why the child re-derives the selection
+/// (`sweep_core::selection`): the elevated process must reach the same verdict
+/// per path, not trust the list the parent sent.
+fn execute_pkg(
+    rule: &Rule,
+    root: &Path,
+    probe: &RealProbe,
+    ctx: &ValidateCtx<'_>,
+    limits: &Limits,
+    plan: &mut Plan,
+    now: i64,
+) -> RuleRun {
+    // The compiler requires `keep_versions` for this kind. Keeping everything is
+    // the safe reading if it were ever absent, so an impossible state cannot
+    // turn into a plan.
+    let keep_versions = rule.keep_versions.unwrap_or(u32::MAX);
+    let found = pkg_cache::scan(root, keep_versions, rule.keep_days, now, limits, probe);
+    let mut run = base_run(rule, Status::Planned, None);
+    run.scanned_bytes = found.bytes_visited;
+
+    if found.missing_root {
+        run.status = Status::NotPresent;
+        return run;
+    }
+    if found.root_is_symlink {
+        run.status = Status::SymlinkedRoot;
+        run.detail = Some(
+            "a symlinked package cache is not followed; point the rule at the real path".into(),
+        );
+        return run;
+    }
+    if found.not_a_directory {
+        run.status = Status::NotADirectory;
+        return run;
+    }
+    if found.root_unreadable {
+        run.status = Status::Unreadable;
+        run.detail = unreadable_detail(rule);
+        return run;
+    }
+    if found.stop != Stop::Complete {
+        run.status = Status::ScanIncomplete;
+        run.detail = Some(match found.stop {
+            Stop::EntryBudget => "entry budget exhausted".to_string(),
+            Stop::TimeBudget => "time budget exhausted".to_string(),
+            Stop::Complete => unreachable!("checked above"),
+        });
+        return run;
+    }
+
+    let archives = found
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.kind == pkg_cache::Kind::Archive)
+        .count();
+    let signatures = found.candidates.len() - archives;
+    run.detail = Some(format!(
+        "{} packages, {} versions within the keep count of {keep_versions}, \
+         {archives} old packages and {signatures} orphaned signatures to remove",
+        found.packages, found.kept
+    ));
+    if found.unrecognised > 0 {
+        if let Some(detail) = run.detail.as_mut() {
+            detail.push_str(&format!(
+                "; {} files that are not packages left alone",
+                found.unrecognised
+            ));
+        }
+    }
 
     let candidates: Vec<PathBuf> = found
         .candidates
@@ -1352,15 +1448,6 @@ fn age_candidates<'a>(
         });
     }
     candidates
-}
-
-fn first_component(path: &Path) -> Option<PathBuf> {
-    path.components()
-        .next()
-        .and_then(|component| match component {
-            Component::Normal(name) => Some(PathBuf::from(name)),
-            _ => None,
-        })
 }
 
 fn blocked_detail(collected: &Collect) -> Option<String> {

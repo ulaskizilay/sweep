@@ -37,6 +37,7 @@ root        = "{cache}/cargo"           # required, absolute, template allowed
 evidence    = "Cargo re-downloads ..."  # required for deleting kinds
 recoverable = true                      # required when keep_days = 0
 keep_days   = 30                        # default 0
+keep_versions = 2                       # pkg-cache only
 requires    = ["bin:cargo"]             # default []
 privilege   = "user"                    # required: "user" or "root"
 exclude     = ["registry/src/**"]       # default [], relative globs
@@ -107,6 +108,7 @@ the file. `..` is refused for the same reason.
 | `file-pattern` | files below the root whose relative path matches `pattern` and are older than `keep_days` | applied |
 | `tool-cache` | every entry below the root, **and then the root** | must be 0: everything goes |
 | `hf-cache` | blobs no `snapshots/` link resolves to, plus abandoned `*.incomplete` downloads | must be > 0 |
+| `pkg-cache` | every package version outside the newest `keep_versions`, and its detached `.sig` | `keep_versions` required; `keep_days` is a recency floor |
 | `report-only` | nothing; counts entries and bytes | informational |
 
 A retention the kind cannot read is a load error (`ignored_keep_days`), not a
@@ -198,7 +200,7 @@ Every check below applies to the built-in packs and to the overlay equally.
 | `bad_id` | the id is empty, longer than 64 bytes, or has a character outside `[a-z0-9._-]` |
 | `duplicate_id` | the id already exists — including a built-in id, so the overlay cannot replace one |
 | `unknown_section` | the section is not one of the sixteen |
-| `unknown_kind` | the kind is not one of the six |
+| `unknown_kind` | the kind is not one of the seven |
 | `unsupported_kind` | the kind exists but is not implemented yet (`if-missing-owner`) |
 | `bad_privilege` | the value is neither `user` nor `root` |
 | `template` | the root is relative, empty, contains `..` or a control byte, mixes a variable with text, or names an unknown variable |
@@ -211,6 +213,9 @@ Every check below applies to the built-in packs and to the overlay equally.
 | `missing_pattern` | `kind = "file-pattern"` with no `pattern` |
 | `unused_pattern` | `pattern` on a kind that does not read it |
 | `bad_pattern` | a pattern is empty, absolute, ends with `/`, has a control byte, or is wildcards only on a `{home}` root |
+| `missing_keep_versions` | `kind = "pkg-cache"` with no `keep_versions` |
+| `unused_keep_versions` | `keep_versions` on a kind that does not read it |
+| `bad_keep_versions` | `keep_versions = 0`, which would leave no version of anything in the cache |
 | `ignored_keep_days` | `dir-sweep` or `tool-cache` declares `keep_days > 0`, which that kind never reads |
 | `requirement` | a `requires` entry is not `bin:<name>` or `dir:<path>` |
 | `bad_depth` | `max_depth` is 0 or greater than 32 |
@@ -225,6 +230,36 @@ Two of these carry a wider meaning:
 - **`{home}` may only be a root for `file-pattern`, with `max_depth <= 6` and a
   pattern that names literal text.** `.xsession-errors*` is a target; `*` is a
   way to delete a home directory one file at a time.
+
+### The `pkg-cache` rule, precisely
+
+`/var/cache/pacman/pkg` has no sensible age cutoff. The archive that matters is
+the newest one, whatever its date, and an age proxy deletes the only copy of the
+running kernel's package on a machine that has not been upgraded in months -
+which is exactly when a rollback is the thing you want. So the retention is a
+version count, the way `paccache` does it.
+
+1. Names are parsed from the right:
+   `name-[epoch:]pkgver-pkgrel-arch.pkg.tar.<compression>[.sig]`. The name may
+   contain hyphens; the architecture, release and version may not.
+2. Versions are ordered with pacman's own algorithm
+   (`crates/sweep-core/src/version.rs`), not a text sort: `1.10` outranks `1.9`,
+   `1.0` outranks `1.0rc1`, and an epoch outranks everything.
+3. The grouping key is `(name, arch, evr)`. One generation is one archive plus
+   its detached `.sig`, and a signature never uses up a version slot.
+4. The newest `keep_versions` generations of each `(name, arch)` are kept, and a
+   generation modified within `keep_days` is kept regardless: a version
+   downloaded yesterday is a downgrade in progress.
+5. A `.sig` whose archive is gone is planned once it is older than `keep_days`.
+6. Anything that does not parse - `download-XXXXXX`, `*.part`, a directory - is
+   counted as unrecognised and left alone. A scan that does not complete plans
+   nothing, because ordering versions from a partial listing can rank the
+   newest generation against a set that is missing entries.
+
+On a stock Arch cache this matched `paccache -d -k2` file for file - 170 paths
+and the same byte total - when the handler was verified. The version comparison
+itself has an automated differential test against `vercmp`, skipped where pacman
+is not installed.
 
 `report-only` is exempt from most of this because it never contributes a plan
 item. It may read a protected tree such as `/var/log/journal`, which is how the

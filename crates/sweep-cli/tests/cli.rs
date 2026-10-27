@@ -529,11 +529,24 @@ fn rules_list_names_every_section_and_keeps_disabled_rules_visible() {
     let line = output
         .stdout
         .lines()
-        .find(|line| line.contains("system.pacman.package-cache"))
+        .find(|line| line.contains("system.coredump.report"))
         .expect("a known rule must be listed");
     assert!(
         line.contains(" off "),
         "disabled rule is not marked: {line:?}"
+    );
+
+    // A package cache has two retentions, and the column shows both: printing
+    // only the version count would hide the recency floor, and printing only the
+    // days would hide how many versions stay.
+    let pkg = output
+        .stdout
+        .lines()
+        .find(|line| line.contains("system.pacman.package-cache"))
+        .expect("the package cache rule is part of the catalog");
+    assert!(
+        pkg.contains("2v/7d"),
+        "a pkg-cache rule must show both retentions: {pkg:?}"
     );
 }
 

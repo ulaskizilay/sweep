@@ -346,6 +346,15 @@ The child trusts nothing the parent says:
   does not know refuses the whole request.
 * It **re-checks `dev`/`ino`** against the plan, so a file swapped while the
   password prompt was open is skipped (`race_changed`), not removed.
+* It **re-derives each rule's selection**, not just its root. A path check can
+  prove `/var/log/wtmp` is inside the `system.log.rotated` root; only the rule
+  knows it is not a rotated log. The child re-runs the rule's own scanner -
+  the glob for `file-pattern`, the version ranking for `pkg-cache` - against the
+  filesystem as it is now, and removes nothing outside the result
+  (`not_selected`). A walk it cannot complete selects nothing. This also means
+  a file whose age or version rank changed while the prompt was open is refused
+  rather than removed: the child can only ever delete less than the parent
+  planned.
 * It **re-runs the full validation** as root, including the ownership pin, the
   mount checks, the snapshot refusal and the open-file scan. The parent's
   preview is not evidence; the child's own eyes are.
@@ -461,6 +470,22 @@ process therefore cannot see that a root daemon holds a file open, so a preview
 may list an item the child will refuse. The direction of that error is the safe
 one — the preview over-counts, the apply refuses — and the child, running as
 root, performs the scan with full visibility before it removes anything.
+
+### R10. The package cache does not know what is installed
+
+`pkg-cache` orders versions by name and mtime, and it never reads the pacman
+database. So a machine whose *installed* version is older than the newest
+`keep_versions` - a deliberate downgrade, or a mirror that has moved on - can
+have the installed archive planned for deletion. `paccache` behaves the same way
+by default: it only consults `pacman -Q` when `-u` asks it to target uninstalled
+packages.
+
+The cost is bounded: the archive is re-downloadable from a mirror, and the
+installed package itself is untouched, because the database lives in
+`/var/lib/pacman` and `/var/lib` is a protected root. `keep_days` is the second
+floor, so a version fetched recently survives whatever the count says. Making
+this exact needs the package database, which is the `pkg:` requirement the
+loader refuses until M5.
 
 ---
 

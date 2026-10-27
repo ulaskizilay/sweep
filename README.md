@@ -35,8 +35,8 @@
 | M3a | applying the plan: confirmation gate, operation log, exit codes | done |
 | M3b | model caches: Hugging Face blob/snapshot scanner, opt-in section | done |
 | M4a | system caches through `run0`/`sudo`, the privilege boundary | done |
-| M4b | `paccache` keep-versions semantics, rotated logs | next |
-| M5 | `purge`, `installer`, large files, `aur` | planned |
+| M4b | `paccache` keep-versions semantics, rotated logs | done |
+| M5 | `purge`, `installer`, large files, `aur` | next |
 | M6 | TUI: `analyze`, `status` | planned |
 | M7 | `uninstall`, `optimize`, `history`, snapshot report | planned |
 | M8 | packaging, man page, completions | planned |
@@ -99,22 +99,22 @@ silently cleans nothing on a large fraction of machines. The resolved physical
 path is re-tested against the same list, deny-only, and the delete happens
 through a directory handle opened with `RESOLVE_NO_SYMLINKS`.
 
-The full contract — including the nine residual risks that are *not* solved —
+The full contract — including the ten residual risks that are *not* solved —
 is in [`docs/SAFETY.md`](docs/SAFETY.md).
 
 ## The rules
 
 The catalog is TOML, and it is data rather than code: `rules/01-system.toml`
-through `rules/16-model-caches.toml`, 107 rules over sixteen sections, 87
+through `rules/16-model-caches.toml`, 107 rules over sixteen sections, 89
 enabled in this build. Each rule names a root, a kind, a retention and the
 sentence that justifies deleting there.
 
 ```bash
 $ sweep rules list
-sweep rules — 16 packs, 107 rules, 87 enabled
+sweep rules — 16 packs, 107 rules, 89 enabled
 
   section            rules  enabled
-  system                 8        3
+  system                 8        5
   user-essentials        5        5
   ...
   dev-tools             28       28
@@ -126,7 +126,9 @@ sweep rules — 16 packs, 107 rules, 87 enabled
   system
     system.fontconfig.cache        dir-sweep      now  root  /var/cache/fontconfig
     system.fwupd.cache             dir-age        30d  root  /var/cache/fwupd
+    system.log.rotated             file-pattern   7d   root  /var/log
     system.man.cache               dir-sweep      now  root  /var/cache/man
+    system.pacman.package-cache    pkg-cache    2v/7d  root  /var/cache/pacman/pkg
 
   dev-tools
     dev.cargo.crate-cache          file-pattern   30d  on    /home/u/.cargo/registry/cache
@@ -138,9 +140,18 @@ sweep rules — 16 packs, 107 rules, 87 enabled
     model.whisper.cache            dir-age        90d  on    /home/u/.cache/whisper
 ```
 
-Six kinds (`dir-sweep`, `dir-age`, `file-pattern`, `tool-cache`, `hf-cache`,
-`report-only`) cover every target. `dir-age` keeps a whole subtree unless
-*every* entry in it is idle past the cutoff and nothing in it was left alone.
+Seven kinds (`dir-sweep`, `dir-age`, `file-pattern`, `tool-cache`, `hf-cache`,
+`pkg-cache`, `report-only`) cover every target. `dir-age` keeps a whole subtree
+unless *every* entry in it is idle past the cutoff and nothing in it was left
+alone.
+
+`pkg-cache` exists because the package cache has no sensible age cutoff. It
+keeps the newest *N* versions of each package, compared with pacman's own
+`vercmp`, so `1.10` outranks `1.9` and a machine that has not been upgraded in
+months still has the archive of the kernel it is running. A version downloaded
+in the last `keep_days` is kept regardless: that is a downgrade in progress.
+On a stock Arch cache, `sweep clean --only system` planned the same 170 files,
+byte for byte, as `paccache -d -k2` when this was verified.
 
 Rules that are wrong do not load: a root inside `/usr`, a duplicate id, a typo
 in a key. A user overlay at `~/.config/sweep/rules.d/*.toml` may add rules but
@@ -182,8 +193,9 @@ filename cannot become an argument.
 
 The elevated child does not trust its parent: it rebuilds the list of allowed
 roots from the compiled catalog, refuses a rule id it has never heard of,
-re-checks each inode, and re-runs the whole validation as root before removing
-anything. It also never writes the log. It prints one JSON line per item and the
+re-checks each inode, re-derives each rule's *selection* (which rotated logs,
+which package versions) instead of trusting the path list, and re-runs the whole
+validation as root before removing anything. It also never writes the log. It prints one JSON line per item and the
 user process appends them, so root never opens a file inside your home.
 
 A pipe has nobody to ask, so a non-interactive run without `--privileged` leaves

@@ -7,33 +7,43 @@
 # compiled catalog and refuses any rule id that is not on it, so a user overlay
 # cannot widen root deletion.
 #
+# The package cache is `pkg-cache`, not `dir-age`: it keeps the newest N
+# versions of each package because the newest archive is the one that matters,
+# whatever its date. An age cut-off would delete the only copy of the running
+# kernel's package on a machine that has not been upgraded in months, which is
+# exactly when a rollback is the thing you want. `keep_days` is a second floor on
+# top of the count: a version downloaded yesterday is a downgrade in progress.
+#
+# Rotated logs are `file-pattern` with a depth of one, because `/var/log` is
+# shared with services that reopen their files on SIGHUP rather than on demand.
+# The rule names the rotated shapes only, and the live files - `pacman.log`, the
+# journal - are excluded by name.
+#
 # What is still disabled, and why:
 #
-#   * `system.pacman.package-cache` needs `paccache` semantics (keep the last N
-#     versions of each package), not an age cut-off. An age proxy can delete the
-#     only copy of the running kernel's package.
 #   * The report-only rules stay off: reading a path needs no privilege, so they
 #     could run, but a `clean` that walks `/var/lib/systemd/coredump` without
 #     explaining the result is noise.
-#   * `system.log.rotated` is a supported kind but stays off until rotated logs
-#     are reviewed as their own change: `/var/log` is shared with services that
-#     reopen their files on SIGHUP rather than on demand.
 
 [meta]
 name = "system"
 description = "Package, font, man page, firmware and log caches outside $HOME"
 
-# Disabled until the version-aware handler lands; see the header.
+# `keep_versions = 2` matches what `paccache -k 2` keeps: the installed version
+# and the one before it, which is the rollback a user actually performs. The
+# archive's detached `.sig` is part of the same generation, so it is never a
+# version slot of its own.
 [[rule]]
 id = "system.pacman.package-cache"
 section = "system"
-kind = "dir-age"
+kind = "pkg-cache"
 root = "/var/cache/pacman/pkg"
 evidence = "Package archives are re-downloadable from a mirror; the installed database lives in /var/lib/pacman."
 recoverable = true
-keep_days = 30
+keep_versions = 2
+keep_days = 7
 privilege = "root"
-enabled = false
+enabled = true
 
 [[rule]]
 id = "system.fontconfig.cache"
@@ -108,19 +118,21 @@ keep_days = 7
 privilege = "root"
 enabled = false
 
-# Rotated logs only: `*.gz`, `*.xz`, `*.old` one level below /var/log. The
-# journal directory is pruned by name, and pacman.log is the package manager's
-# audit trail rather than a log to rotate away.
+# Rotated logs only, one level below /var/log. `*.log.*` covers both the plain
+# `boot.log.1` that systemd rotates and the compressed `boot.log.1.gz`, while
+# leaving `Xorg.0.log` alone - a live log has no second dot. `pacman.log*` is the
+# package manager's audit trail, not a log to rotate away, and it is excluded
+# including its own rotations.
 [[rule]]
 id = "system.log.rotated"
 section = "system"
 kind = "file-pattern"
 root = "/var/log"
-pattern = ["*.gz", "*.xz", "*.old"]
-exclude = ["journal", "journal/**", "pacman.log"]
+pattern = ["*.gz", "*.xz", "*.zst", "*.old", "*.log.*"]
+exclude = ["journal", "journal/**", "pacman.log*"]
 evidence = "A rotated log has already been replaced by a fresh one; the live files are untouched."
 recoverable = true
 keep_days = 7
 privilege = "root"
 max_depth = 1
-enabled = false
+enabled = true

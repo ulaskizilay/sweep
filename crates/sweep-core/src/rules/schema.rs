@@ -40,6 +40,9 @@ pub struct RawRule {
     pub recoverable: bool,
     #[serde(default)]
     pub keep_days: u32,
+    /// Required by `kind = "pkg-cache"`, refused by every other kind.
+    #[serde(default)]
+    pub keep_versions: Option<u32>,
     #[serde(default)]
     pub requires: Vec<String>,
     pub privilege: String,

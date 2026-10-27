@@ -50,6 +50,9 @@ pub enum RuleErrorKind {
     MissingPattern,
     UnusedPattern,
     BadPattern,
+    MissingKeepVersions,
+    UnusedKeepVersions,
+    BadKeepVersions,
     IgnoredKeepDays,
     Requirement,
     BadDepth,
@@ -77,6 +80,9 @@ impl RuleErrorKind {
             RuleErrorKind::MissingPattern => "missing_pattern",
             RuleErrorKind::UnusedPattern => "unused_pattern",
             RuleErrorKind::BadPattern => "bad_pattern",
+            RuleErrorKind::MissingKeepVersions => "missing_keep_versions",
+            RuleErrorKind::UnusedKeepVersions => "unused_keep_versions",
+            RuleErrorKind::BadKeepVersions => "bad_keep_versions",
             RuleErrorKind::IgnoredKeepDays => "ignored_keep_days",
             RuleErrorKind::Requirement => "requirement",
             RuleErrorKind::BadDepth => "bad_depth",
@@ -131,6 +137,7 @@ pub fn compile(raw: RawRule, pack: &str, xdg: &Xdg) -> Result<Rule, RuleError> {
         evidence,
         recoverable,
         keep_days,
+        keep_versions,
         requires,
         privilege,
         exclude,
@@ -216,6 +223,41 @@ pub fn compile(raw: RawRule, pack: &str, xdg: &Xdg) -> Result<Rule, RuleError> {
     }
     let patterns = compile_patterns(patterns, pack, &label, "pattern")?;
     let exclude = compile_patterns(exclude, pack, &label, "exclude")?;
+
+    // `keep_versions` is the retention of `pkg-cache`. It is required there and
+    // refused everywhere else, for the same reason `pattern` is: a key the
+    // engine does not read would be printed by `rules list` as a promise the
+    // run never keeps.
+    let keep_versions =
+        match (kind, keep_versions) {
+            (Kind::PkgCache, None) => return Err(fail(
+                RuleErrorKind::MissingKeepVersions,
+                pack,
+                Some(&label),
+                "kind = \"pkg-cache\" needs keep_versions: how many versions of each package stay"
+                    .to_string(),
+            )),
+            (Kind::PkgCache, Some(0)) => {
+                return Err(fail(
+                    RuleErrorKind::BadKeepVersions,
+                    pack,
+                    Some(&label),
+                    "keep_versions = 0 would leave no version of anything in the cache; \
+                 use at least 1"
+                        .to_string(),
+                ))
+            }
+            (Kind::PkgCache, Some(count)) => Some(count),
+            (_, Some(_)) => {
+                return Err(fail(
+                    RuleErrorKind::UnusedKeepVersions,
+                    pack,
+                    Some(&label),
+                    format!("keep_versions is only read by kind = \"pkg-cache\", not \"{kind}\""),
+                ))
+            }
+            (_, None) => None,
+        };
 
     // The remaining checks are ordered from "this would be catastrophic" to
     // "this would be confusing", so a rule with several problems reports the
@@ -421,6 +463,7 @@ pub fn compile(raw: RawRule, pack: &str, xdg: &Xdg) -> Result<Rule, RuleError> {
         evidence,
         recoverable,
         keep_days,
+        keep_versions,
         requires,
         privilege,
         exclude,
