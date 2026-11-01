@@ -255,6 +255,10 @@ pub struct Space {
     pub avail: u64,
     /// Bytes available to unprivileged users, the number `df` shows.
     pub block_size: u64,
+    /// Inode capacity, or 0 on a filesystem that does not track inodes.
+    pub files: u64,
+    /// Inodes still free, or 0 when unknown.
+    pub files_free: u64,
 }
 
 /// `statvfs(3)` for a path. Used to report *reclaimed* space separately from
@@ -276,6 +280,8 @@ pub fn statvfs_space(path: &Path) -> io::Result<Space> {
         free: raw.f_bfree as u64 * raw.f_frsize as u64,
         avail: raw.f_bavail as u64 * raw.f_frsize as u64,
         block_size: raw.f_frsize as u64,
+        files: raw.f_files as u64,
+        files_free: raw.f_ffree as u64,
     })
 }
 

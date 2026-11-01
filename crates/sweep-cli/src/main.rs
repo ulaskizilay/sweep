@@ -6,8 +6,10 @@
 #![deny(unsafe_code)]
 
 mod doctor;
+mod format;
 mod pipeline;
 mod rules;
+mod status;
 
 use std::process::ExitCode;
 
@@ -71,6 +73,9 @@ enum Command {
         #[arg(long, value_name = "SECTION")]
         only: Vec<Section>,
     },
+
+    /// A compact, read-only health summary: disk, memory, caches, last run.
+    Status,
 
     /// Remove build artifacts from the projects in your home directory.
     ///
@@ -200,6 +205,7 @@ fn main() -> ExitCode {
             yes,
             privileged,
         ),
+        Command::Status => status::run(cli.json, cli.verbose),
         Command::Aur { dry_run, yes } => pipeline::run(
             pipeline::Scope::AUR,
             cli.json,

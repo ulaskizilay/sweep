@@ -1286,6 +1286,101 @@ fn only_restricts_the_run_to_the_named_sections() {
     );
 }
 
+// --------------------------------------------------------------- status ---
+
+#[test]
+fn status_is_read_only_and_reports_the_last_applied_run() {
+    let home = home();
+    write(
+        home.path(),
+        "notes/todo.md",
+        "the status command must not touch this",
+    );
+    // A finished session followed by nothing: the tail of the log is the run
+    // status should describe.
+    write(
+        home.path(),
+        ".local/state/sweep/operations.jsonl",
+        concat!(
+            r#"{"ts":"2020-01-01T00:00:00Z","cmd":"purge","session":"purge-1","action":"REMOVED","rule":"project.artifacts.sources","path":"/home/u/a","bytes":4096}"#,
+            "\n",
+            r#"{"ts":"2020-01-02T00:00:00Z","cmd":"clean","session":"clean-2","action":"REMOVED","rule":"dev.cargo.crate-cache","path":"/home/u/b","bytes":1024}"#,
+            "\n",
+            r#"{"ts":"2020-01-02T00:00:01Z","cmd":"clean","session":"clean-2","action":"REMOVED","rule":"dev.cargo.crate-cache","path":"/home/u/c","bytes":1024}"#,
+            "\n",
+            r#"{"ts":"2020-01-02T00:00:02Z","cmd":"clean","session":"clean-2","action":"SKIPPED","rule":"dev.cargo.crate-cache","path":"/home/u/d","bytes":0}"#,
+            "\n",
+        ),
+    );
+    let before = snapshot(home.path());
+
+    let output = run_in(home.path(), &["status"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    assert!(
+        output.stdout.contains("sweep status —"),
+        "the header must say what this is:\n{}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("last sweep")
+            && output.stdout.contains("2 items")
+            && output.stdout.contains("2.0 KiB"),
+        "the run's own totals must be readable without opening the log:\n{}",
+        output.stdout
+    );
+    assert!(
+        !output.stdout.contains("purge-1"),
+        "only the last session is described, not every run in history:\n{}",
+        output.stdout
+    );
+    assert_eq!(
+        before,
+        snapshot(home.path()),
+        "status is read-only: no file below HOME may change"
+    );
+
+    let json = run_in(home.path(), &["status", "--json"]);
+    assert_eq!(json.code, Some(0), "stderr: {}", json.stderr);
+    let report: serde_json::Value = serde_json::from_str(&json.stdout).expect("one document");
+    let ids: Vec<&str> = report["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .filter_map(|finding| finding["id"].as_str())
+        .collect();
+    for id in [
+        "disk",
+        "inodes",
+        "memory",
+        "load",
+        "pacman.cache",
+        "pacman.orphans",
+        "trash",
+        "last.run",
+    ] {
+        assert!(ids.contains(&id), "status must report {id}: {ids:?}");
+    }
+    assert_eq!(report["version"], env!("CARGO_PKG_VERSION"));
+    assert!(
+        report["generated_at"]
+            .as_str()
+            .unwrap_or_default()
+            .ends_with('Z'),
+        "the timestamp is RFC 3339 UTC: {}",
+        report["generated_at"]
+    );
+    assert!(
+        report["host"]["kernel"].as_str().unwrap_or_default().len() > 1,
+        "the host block is what makes a pasted report readable: {}",
+        report["host"]
+    );
+    assert!(
+        report["health"] == "ok" || report["health"] == "attention",
+        "health is a two-value verdict: {}",
+        report["health"]
+    );
+}
+
 // ------------------------------------------------------------------ aur ---
 
 fn age_file(path: &Path, days: u64) {

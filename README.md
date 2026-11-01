@@ -19,13 +19,14 @@
 
 ## Status
 
-> **Pre-alpha.** `doctor`, `rules` and `clean` work. `clean` prints the plan,
-> asks once, then deletes through the single funnel and writes one operation-log
-> row per decision; `--dry-run` stops before the question and writes nothing at
-> all. The catalog is 108 rules over seventeen sections, and the section whose loss
-> may not be recoverable — downloaded model weights — is skipped unless you name
-> it. System caches are swept through a second process: `sweep` never runs as
-> root, so it plans as you and asks before elevating.
+> **Pre-alpha.** `doctor`, `rules`, `clean`, `purge`, `installer`, `aur` and
+> `status` work. `clean` prints the plan, asks once, then deletes through the
+> single funnel and writes one operation-log row per decision; `--dry-run` stops
+> before the question and writes nothing at all. The catalog is 109 rules over
+> seventeen sections, and the section whose loss may not be recoverable —
+> downloaded model weights — is skipped unless you name it. System caches are
+> swept through a second process: `sweep` never runs as root, so it plans as you
+> and asks before elevating.
 
 | Milestone | Scope | State |
 |---|---|---|
@@ -39,7 +40,8 @@
 | M5a | project artifacts: the manifest-gated `purge` | done |
 | M5b | `installer`: downloaded package and image files | done |
 | M5c | AUR helper caches: `aur` | done |
-| M6 | TUI: `analyze`, `status`, the large-file report | planned |
+| M6a | `status`: a read-only health summary, text and JSON | done |
+| M6b | `analyze`: the disk explorer and the large-file report | next |
 | M7 | `uninstall`, `optimize`, `history`, snapshot report | planned |
 | M8 | packaging, man page, completions | planned |
 
@@ -302,7 +304,8 @@ cargo build --release
 | `sweep clean --privileged` | also sweep root-owned system caches, through `run0` or `sudo` | works |
 | `sweep purge` | `node_modules`, `target`, virtualenvs — only where a manifest says a build made them | works |
 | `sweep installer` | package and image files in `~/Downloads` that were never touched again | works |
-| `sweep analyze` / `status` | disk explorer, health summary, files over a gigabyte | M6 |
+| `sweep status` | disk, inodes, memory, load, package cache, orphans, trash, last sweep; `--json` for scripts | works |
+| `sweep analyze` | disk explorer, files over a gigabyte, Trash-based ad hoc cleanup | M6b |
 | `sweep uninstall` / `optimize` / `history` | package removal, maintenance, past actions | M7 |
 | `sweep aur` | built `.pkg.tar.*` archives in helper caches; clones and sources are reported, never taken | works |
 
@@ -322,6 +325,31 @@ sits on one.
 `sweep doctor` is also the answer to "why did it skip everything?", so a bug
 report can be its output pasted whole. `sweep rules list --verbose` answers the
 narrower version: which rule, which requirement, which retention.
+
+### Status is a snapshot, not a monitor
+
+`sweep status` prints one screen and exits. It reads `/proc`, `statvfs`, the
+package cache and the operation log, and it writes nothing at all — no state
+file, no lock, no log row, so it is safe to put in a shell prompt or run every
+minute from a timer if you want to. It is not a daemon, it keeps no history, and
+it has no alerts.
+
+Every row is either a number or `— not available`. A row that cannot be measured
+says so instead of printing a plausible zero: a tree the walk could not finish
+enumerating is "not available", never a smaller size. `--verbose` adds the reason
+it could not be measured; the default keeps the screen quiet.
+
+The actionable rows name the command that acts on them (`sweep clean --only
+system` for a package cache, `sudo pacman -Rns $(pacman -Qtdq)` for orphans),
+because a health summary that cannot be acted on is a dashboard. Trash appears
+with its size and no command: paired `files/` + `info/` removal is not
+implemented yet, so naming a sweep command there would be a promise the tool does
+not keep.
+
+`--json` prints the same facts with stable field names, one document, for a
+script that should not parse the prose. The last-run row sums the newest session
+in the operation log; if a session is longer than the 64 KiB tail window, the row
+says `at least N items` rather than printing a short total as if it were whole.
 
 ## Development
 

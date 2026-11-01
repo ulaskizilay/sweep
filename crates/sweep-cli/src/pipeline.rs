@@ -35,6 +35,7 @@ use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use crate::format::human_bytes;
 use serde::Serialize;
 use sweep_core::fs_facts::MountTable;
 use sweep_core::model_cache::{self, Leftover};
@@ -1972,21 +1973,6 @@ fn render(report: &PipelineReport, verbose: u8) -> String {
         ));
     }
     out
-}
-
-fn human_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
 }
 
 fn now_unix() -> i64 {
