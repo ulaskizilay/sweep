@@ -88,6 +88,20 @@ enum Command {
         yes: bool,
     },
 
+    /// Remove installer files that have already been installed or can be fetched again.
+    ///
+    /// The target is the archive, never the installed program: package files and
+    /// images under `~/Downloads` that nobody has touched for a month.
+    Installer {
+        /// Show the plan and stop: no deletion, no operation-log entry.
+        #[arg(long, conflicts_with = "yes")]
+        dry_run: bool,
+
+        /// Apply the plan without asking. Required when stdin is not a terminal.
+        #[arg(long)]
+        yes: bool,
+    },
+
     /// Internal: remove root-owned items on behalf of `clean`.
     ///
     /// Hidden, undocumented and never called by a user. It exists so the
@@ -171,6 +185,15 @@ fn main() -> ExitCode {
             dry_run,
             yes,
             privileged,
+        ),
+        Command::Installer { dry_run, yes } => pipeline::run(
+            pipeline::Scope::INSTALLER,
+            cli.json,
+            cli.verbose,
+            &[],
+            dry_run,
+            yes,
+            false,
         ),
         Command::Purge { dry_run, yes } => pipeline::run(
             pipeline::Scope::PURGE,

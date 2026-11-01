@@ -31,7 +31,7 @@ without compiling.
 ```toml
 [[rule]]
 id          = "dev.cargo.crate-cache"     # required, namespaced, unique
-section     = "dev-tools"               # required, one of the sixteen sections
+section     = "dev-tools"               # required, one of the seventeen sections
 kind        = "dir-age"                 # required, see below
 root        = "{cache}/cargo"           # required, absolute, template allowed
 evidence    = "Cargo re-downloads ..."  # required for deleting kinds
@@ -57,7 +57,8 @@ documentation. It has no effect on behaviour.
 
 `system`, `user-essentials`, `app-caches`, `browsers`, `cloud-office`,
 `dev-tools`, `apps`, `virtualization`, `local-data`, `orphans`, `aur`,
-`firmware`, `snapshots`, `large-files`, `project-artifacts`, `model-caches`.
+`firmware`, `snapshots`, `installers`, `large-files`, `project-artifacts`,
+`model-caches`.
 
 The list is closed. A new section is a product decision (it needs a row in the
 `clean` report), not something a pack can invent.
@@ -66,6 +67,20 @@ The list is closed. A new section is a product decision (it needs a row in the
 only one whose items travel through the privilege boundary. Everything else runs
 as the invoking user, which is why starting the whole program as root is refused
 at startup rather than checked per rule.
+
+### Sections another command owns
+
+Two sections belong to a command of their own rather than to `clean`:
+`installers` to `sweep installer` and `project-artifacts` to `sweep purge`.
+`Section::command()` is the single place that maps a section to its owner, and a
+bare `sweep clean` lists those rules with status `command_scoped` instead of
+scanning them. Naming the section with `--only` still works - that is a user
+asking for it by name, and the report says so.
+
+The split is about the walk, not about danger. `clean` opens paths the rule
+already names; `installer` reads a directory the user fills by hand, and `purge`
+walks project roots looking for a manifest. Each needs its own preview and its
+own confirmation, and neither belongs in a bare `clean`.
 
 ### Opt-in sections
 
@@ -200,7 +215,7 @@ Every check below applies to the built-in packs and to the overlay equally.
 | `read_failed` | a file in `rules.d` could not be read |
 | `bad_id` | the id is empty, longer than 64 bytes, or has a character outside `[a-z0-9._-]` |
 | `duplicate_id` | the id already exists — including a built-in id, so the overlay cannot replace one |
-| `unknown_section` | the section is not one of the sixteen |
+| `unknown_section` | the section is not one of the seventeen |
 | `unknown_kind` | the kind is not one of the eight |
 | `unsupported_kind` | the kind exists but is not implemented yet (`if-missing-owner`) |
 | `bad_privilege` | the value is neither `user` nor `root` |

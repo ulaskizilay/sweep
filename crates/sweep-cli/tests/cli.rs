@@ -1286,6 +1286,120 @@ fn only_restricts_the_run_to_the_named_sections() {
     );
 }
 
+// ------------------------------------------------------------ installer ---
+
+#[test]
+fn installer_takes_archives_from_downloads_and_leaves_the_rest() {
+    let home = home();
+    for relative in [
+        "Downloads/pkg.pkg.tar.zst",
+        "Downloads/arch/linux.iso",
+        "Downloads/fresh.deb",
+        "Downloads/source.zip",
+        "Downloads/tool.exe",
+        "Downloads/sub/deep/too-deep.rpm",
+        "Documents/vm.iso",
+    ] {
+        write(home.path(), relative, "payload");
+    }
+    // Everything is old except the package fetched two days ago: it may be the
+    // copy the user is about to install.
+    for relative in [
+        "Downloads/pkg.pkg.tar.zst",
+        "Downloads/arch/linux.iso",
+        "Downloads/source.zip",
+        "Downloads/tool.exe",
+        "Downloads/sub/deep/too-deep.rpm",
+        "Documents/vm.iso",
+    ] {
+        let path = home.path().join(relative);
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(60 * 86_400);
+        std::fs::File::options()
+            .read(true)
+            .open(&path)
+            .expect("open")
+            .set_times(std::fs::FileTimes::new().set_modified(when))
+            .expect("set mtime");
+    }
+    let before = snapshot(home.path());
+
+    let dry = run_in(home.path(), &["installer", "--dry-run"]);
+    assert_eq!(dry.code, Some(0), "stderr: {}", dry.stderr);
+    assert!(
+        dry.stdout
+            .contains("sweep installer — dry run, nothing is deleted"),
+        "the header must name the command:\n{}",
+        dry.stdout
+    );
+    assert_eq!(before, snapshot(home.path()), "a dry run writes nothing");
+
+    let applied = run_in(home.path(), &["installer", "--yes"]);
+    assert_eq!(applied.code, Some(0), "stderr: {}", applied.stderr);
+
+    for gone in ["Downloads/pkg.pkg.tar.zst", "Downloads/arch/linux.iso"] {
+        assert!(
+            !home.path().join(gone).exists(),
+            "the installer archive must be gone: {gone}"
+        );
+    }
+    for kept in [
+        "Downloads/fresh.deb",
+        "Downloads/source.zip",
+        "Downloads/tool.exe",
+        "Downloads/sub/deep/too-deep.rpm",
+        "Documents/vm.iso",
+    ] {
+        assert!(
+            home.path().join(kept).exists(),
+            "neither a recent download, an archive, nor a file outside Downloads is an installer: {kept}"
+        );
+    }
+
+    let rows = log_rows(home.path());
+    assert!(!rows.is_empty(), "an applied installer run must be logged");
+    for row in &rows {
+        assert_eq!(
+            row["cmd"], "installer",
+            "the log must name the command: {row}"
+        );
+        assert!(
+            row["session"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("installer-"),
+            "the session separates installer rows from clean rows: {row}"
+        );
+    }
+}
+
+#[test]
+fn a_bare_clean_names_installer_instead_of_sweeping_downloads() {
+    let home = home();
+    write(home.path(), "Downloads/pkg.pkg.tar.zst", "payload");
+
+    let output = run_in(home.path(), &["clean", "--dry-run", "--json"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("one document");
+    let rule = report["rules"]
+        .as_array()
+        .expect("rules")
+        .iter()
+        .find(|run| run["id"] == "installer.downloads")
+        .expect("the rule is listed even when another command owns it");
+    assert_eq!(rule["status"], "command_scoped", "{rule}");
+    assert!(
+        rule["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("sweep installer"),
+        "the skip must name the command to run: {rule}"
+    );
+    assert!(
+        home.path().join("Downloads/pkg.pkg.tar.zst").exists(),
+        "a bare clean must not touch Downloads"
+    );
+}
+
 // ---------------------------------------------------------------- purge ---
 
 /// A home with three projects, one artifact-shaped directory with no manifest,

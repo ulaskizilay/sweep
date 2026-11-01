@@ -83,6 +83,11 @@ impl Scope {
         sections: Sections::Assigned(Section::ProjectArtifacts),
     };
 
+    pub const INSTALLER: Scope = Scope {
+        command: "installer",
+        sections: Sections::Assigned(Section::Installers),
+    };
+
     /// The sections this run may touch.
     ///
     /// An explicit `--only` wins over the command's own list: `clean --only
@@ -850,11 +855,17 @@ fn build(
     let command = scope.command;
     let sections = scope.sections(only);
     // The report lists every rule the user asked to see; `sections` decides
-    // which of them may run. That is what lets a bare `clean` say
-    // "project-artifacts belongs to `sweep purge`" instead of hiding the
-    // capability, and it is why the rule list and the section filter cannot
-    // drift apart.
-    let selected = set.select(only, xdg);
+    // which of them may run. Those differ for a bare `clean`, which lists the
+    // sections another command owns (status `belongs to another command`)
+    // instead of hiding them, but scans none of them. A command that owns its
+    // section reports only that section, because seventeen rows of "not
+    // selected" is not a preview.
+    let report_sections: Vec<Section> = match (only.is_empty(), scope.sections) {
+        (false, _) => only.to_vec(),
+        (true, Sections::Assigned(section)) => vec![section],
+        (true, Sections::Clean) => Section::ALL.to_vec(),
+    };
+    let selected = set.select(&report_sections, xdg);
     let now = now_unix();
 
     // Every deletable root becomes an allowed root, because validation works on

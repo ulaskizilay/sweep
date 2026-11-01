@@ -65,16 +65,20 @@ pub const BUILTIN_PACKS: &[(&str, &str)] = &[
         include_str!("../../../../rules/13-snapshots.toml"),
     ),
     (
-        "rules/14-large-files.toml",
-        include_str!("../../../../rules/14-large-files.toml"),
+        "rules/14-installers.toml",
+        include_str!("../../../../rules/14-installers.toml"),
     ),
     (
-        "rules/15-project-artifacts.toml",
-        include_str!("../../../../rules/15-project-artifacts.toml"),
+        "rules/15-large-files.toml",
+        include_str!("../../../../rules/15-large-files.toml"),
     ),
     (
-        "rules/16-model-caches.toml",
-        include_str!("../../../../rules/16-model-caches.toml"),
+        "rules/16-project-artifacts.toml",
+        include_str!("../../../../rules/16-project-artifacts.toml"),
+    ),
+    (
+        "rules/17-model-caches.toml",
+        include_str!("../../../../rules/17-model-caches.toml"),
     ),
 ];
 

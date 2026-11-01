@@ -22,7 +22,7 @@
 > **Pre-alpha.** `doctor`, `rules` and `clean` work. `clean` prints the plan,
 > asks once, then deletes through the single funnel and writes one operation-log
 > row per decision; `--dry-run` stops before the question and writes nothing at
-> all. The catalog is 107 rules over sixteen sections, and the section whose loss
+> all. The catalog is 108 rules over seventeen sections, and the section whose loss
 > may not be recoverable — downloaded model weights — is skipped unless you name
 > it. System caches are swept through a second process: `sweep` never runs as
 > root, so it plans as you and asks before elevating.
@@ -37,7 +37,8 @@
 | M4a | system caches through `run0`/`sudo`, the privilege boundary | done |
 | M4b | `paccache` keep-versions semantics, rotated logs | done |
 | M5a | project artifacts: the manifest-gated `purge` | done |
-| M5b | `installer`, large files, `aur` | next |
+| M5b | `installer`: downloaded package and image files | done |
+| M5c | large files, `aur` | next |
 | M6 | TUI: `analyze`, `status` | planned |
 | M7 | `uninstall`, `optimize`, `history`, snapshot report | planned |
 | M8 | packaging, man page, completions | planned |
@@ -106,13 +107,13 @@ is in [`docs/SAFETY.md`](docs/SAFETY.md).
 ## The rules
 
 The catalog is TOML, and it is data rather than code: `rules/01-system.toml`
-through `rules/16-model-caches.toml`, 107 rules over sixteen sections, 89
+through `rules/17-model-caches.toml`, 108 rules over seventeen sections, 91
 enabled in this build. Each rule names a root, a kind, a retention and the
 sentence that justifies deleting there.
 
 ```bash
 $ sweep rules list
-sweep rules — 16 packs, 107 rules, 89 enabled
+sweep rules — 17 packs, 108 rules, 91 enabled
 
   section            rules  enabled
   system                 8        5
@@ -188,6 +189,22 @@ the one place sweep unlinks a link, and it is why the venv's `bin/python3` and
 paths the rule already names; `purge` walks your home, so it needs its own
 preview and its own confirmation. A bare `sweep clean` lists the section as
 `belongs to another command` instead of scanning it.
+
+### An installer is not the installed program
+
+`sweep installer` removes the archive: the `.pkg.tar.zst` downloaded instead of
+using the mirror, the `.deb` for a foreign package, the `.iso` burned once, the
+`.AppImage` that was copied into `/usr/local/bin`. The package database, the
+unpacked files and the application's own state are untouched, so removing the
+archive never uninstalls anything.
+
+The rule is narrow on purpose. It reads `~/Downloads` two levels deep and it
+matches six suffixes, because the name is the only evidence there is. It does
+not take `.zip`, `.tar.gz` or `.7z` (as likely to be a source export or a backup
+as an installer), and it does not take `.exe` or `.msi` (a portable Windows
+program *is* that file; removing it is an uninstall, which is a different
+command with a different confirmation). An `.iso` under `~/VMs` stays too: a
+disk image a virtual machine is running is not a download someone forgot.
 
 ### Model weights are opt-in
 
@@ -266,10 +283,10 @@ cargo build --release
 | `sweep clean --only model-caches` | the opt-in section: model blobs, checkpoint caches | works |
 | `sweep clean --privileged` | also sweep root-owned system caches, through `run0` or `sudo` | works |
 | `sweep purge` | `node_modules`, `target`, virtualenvs — only where a manifest says a build made them | works |
-| `sweep installer` | installer leftovers | M5b |
+| `sweep installer` | package and image files in `~/Downloads` that were never touched again | works |
 | `sweep analyze` / `status` | disk explorer, health summary | M6 |
 | `sweep uninstall` / `optimize` / `history` | package removal, maintenance, past actions | M7 |
-| `sweep aur` | AUR package cleanup | M5b |
+| `sweep aur` | AUR package cleanup | M5c |
 
 `sweep clean` is two phases. It plans — load the catalog, scan the roots,
 validate every candidate — and only then asks. The question is skipped with

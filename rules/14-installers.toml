@@ -1,0 +1,56 @@
+# Installer files - the source of `sweep installer`.
+#
+# An installer is a package that has already been installed or can be fetched
+# again: the `.pkg.tar.zst` a user downloaded instead of using the mirror, a
+# `.deb` or `.rpm` for a foreign package, an `.iso` burned once. What it is *not*
+# is the installed program. The package database, the files pacman unpacked and
+# the application's own state are all outside this rule, so removing the archive
+# never uninstalls anything.
+#
+# This section belongs to `installer`, not `clean`: finding installers means
+# reading a directory the user fills by hand, and the preview has to say which
+# file is which. `Section::command()` keeps a bare `sweep clean` out of it, and
+# `sweep clean --only installers` still works for a user who asks by name.
+#
+# The scope is deliberately narrow:
+#
+#   * only `{home}/Downloads`, because that is where a browser puts a download.
+#     An `.iso` under `~/VMs` or `~/.local/share/libvirt` is a disk image a
+#     virtual machine is running, not an installer.
+#   * two levels deep, so `Downloads/arch/x.iso` is found and an arbitrarily deep
+#     archive tree is not.
+#   * no `.exe` and no `.msi`. A portable Windows program is that single file;
+#     deleting it deletes the program, which is uninstall's job and needs a
+#     confirmation. A `.dmg` on Linux is ambiguous (an image to extract, or an
+#     installer for a VM), so it is kept out for the same reason.
+#   * packaged archives (`.zip`, `.tar.gz`, `.7z`) are not installers. They are
+#     as likely to be a source export or a data backup, and the name cannot tell
+#     them apart.
+#
+# `keep_days = 30` is the recency floor: a file downloaded in the last month may
+# be the copy a user is about to install, or the one they kept for an offline
+# reinstall. A month is long enough that it has been *downloaded and forgotten*
+# rather than *downloaded and pending*.
+
+[meta]
+name = "installers"
+description = "Downloaded package and image files: .pkg.tar.*, .deb, .rpm, .AppImage, .iso, .run"
+
+[[rule]]
+id = "installer.downloads"
+section = "installers"
+kind = "file-pattern"
+root = "{home}/Downloads"
+pattern = [
+  "*.pkg.tar.*",
+  "*.deb",
+  "*.rpm",
+  "*.AppImage",
+  "*.iso",
+  "*.run",
+]
+evidence = "An installer archive is the package itself, not the installed program: the package database, the unpacked files and the app's state stay, and the archive is re-downloadable from where it came."
+recoverable = true
+keep_days = 30
+privilege = "user"
+max_depth = 2
