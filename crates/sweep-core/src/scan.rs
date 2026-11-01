@@ -184,7 +184,14 @@ pub enum Select<'a> {
 
 /// Everything a walk needs besides the rule root and the probe.
 pub struct Spec<'a> {
-    /// Levels below the rule root to visit. 1 means the root's children.
+    /// Depth budget, counted from the root at 0.
+    ///
+    /// A directory at level `n` is entered while `n < depth`, and a directory
+    /// that is entered is also emitted once its own children are done. So `1`
+    /// reaches the root's children as *files* only (a directory there cannot be
+    /// emptied and is reported as too deep), and `2` enters them and reports
+    /// them. Files are emitted at any level the walk reaches, which is why
+    /// `file-pattern` rules read `max_depth` as "how deep to look for a match".
     pub depth: usize,
     pub select: Select<'a>,
     pub exclude: &'a [Pattern],

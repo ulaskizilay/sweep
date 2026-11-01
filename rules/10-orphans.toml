@@ -32,7 +32,7 @@ root = "{config}"
 evidence = "Reported, never deleted: requires desktop-file, package-owner and flatpak evidence."
 keep_days = 30
 privilege = "user"
-max_depth = 1
+max_depth = 2
 enabled = false
 
 [[rule]]
@@ -43,5 +43,5 @@ root = "{data}"
 evidence = "Reported, never deleted: requires desktop-file, package-owner and flatpak evidence."
 keep_days = 30
 privilege = "user"
-max_depth = 1
+max_depth = 2
 enabled = false

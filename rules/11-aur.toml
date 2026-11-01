@@ -1,69 +1,98 @@
-# AUR helper caches.
+# AUR helper caches - the source of `sweep aur`.
 #
-# `paru` and `yay` keep a full git clone per package under `~/.cache`. Deleting
-# the clone is safe for an unmodified package: the PKGBUILD is fetched again.
+# `paru`, `yay` and `trizen` keep one directory per package under `~/.cache`:
+# a git clone of the AUR recipe, the sources `makepkg` downloaded, and the
+# `.pkg.tar.*` archives `makepkg` built. Only the last of those is a target.
 #
-# It is not safe when the user edited the PKGBUILD, which is common for AUR
-# packages: that edit exists nowhere else. A directory that contains a PKGBUILD
-# the user touched is therefore excluded from the sweep, and a clone whose state
-# cannot be judged is report-only.
+# The reason is the recipe. An AUR package is a `PKGBUILD` the user may have
+# edited - a version bump, a dependency removed, a patch added - and that edit
+# exists nowhere else. Deleting the clone deletes it. The built archive, by
+# contrast, is output: `makepkg` reproduces it from the `PKGBUILD` that stays,
+# and `paru`/`yay` will rebuild on the next upgrade. Keeping the sources is
+# deliberate too: if upstream republished a tarball, the cached copy is the one
+# whose checksum still matches, so removing it can make the package unbuildable
+# until the recipe is updated by hand.
 #
-# `pq`/`src` build output is a different thing and is swept: it is produced by
-# makepkg and reproducible from the PKGBUILD.
+# So every helper gets two rules, not one:
+#
+#   * `*.pkg.tar.*` at depth 2 (`<cache>/<pkg>/<archive>`) is a file-pattern
+#     with a one-week recency floor - an archive built minutes ago may be about
+#     to be installed with `pacman -U`;
+#   * the clone directory itself is report-only. The user is told how much is
+#     there and why it was not taken, which is the honest answer to "why is this
+#     still on my disk".
+#
+# This section belongs to `installer`'s sibling command `aur`: the walk is small
+# but the confirmation has to explain git clones and recipes, and a bare
+# `sweep clean` has no room for that. `Section::command()` keeps it out of
+# `clean`, and `sweep clean --only aur` still works for a user who names it.
 
 [meta]
 name = "aur"
-description = "AUR helper build output and clone caches"
+description = "Built package archives in AUR helper caches; clones and sources are reported only"
 
 [[rule]]
-id = "aur.paru.pkg"
+id = "aur.paru.archives"
 section = "aur"
-kind = "dir-sweep"
-root = "{cache}/paru/pkg"
-evidence = "Built package archives are reproduced by makepkg from the PKGBUILD on the next build."
+kind = "file-pattern"
+root = "{cache}/paru/clone"
+pattern = "*.pkg.tar.*"
+evidence = "makepkg reproduces the archive from the PKGBUILD that stays in the clone; the installed package and the AUR recipe are untouched."
 recoverable = true
-keep_days = 0
-requires = ["bin:paru"]
+keep_days = 7
 privilege = "user"
+max_depth = 2
 
 [[rule]]
-id = "aur.paru.clone"
+id = "aur.paru.clones"
 section = "aur"
 kind = "report-only"
 root = "{cache}/paru/clone"
 evidence = "Reported, never deleted: a user-edited PKGBUILD exists only in this clone."
 keep_days = 30
 privilege = "user"
-enabled = false
+max_depth = 2
 
 [[rule]]
-id = "aur.yay.cache"
+id = "aur.yay.archives"
+section = "aur"
+kind = "file-pattern"
+root = "{cache}/yay"
+pattern = "*.pkg.tar.*"
+evidence = "makepkg reproduces the archive from the PKGBUILD that stays in the clone; the installed package and the AUR recipe are untouched."
+recoverable = true
+keep_days = 7
+privilege = "user"
+max_depth = 2
+
+[[rule]]
+id = "aur.yay.clones"
 section = "aur"
 kind = "report-only"
 root = "{cache}/yay"
 evidence = "Reported, never deleted: a user-edited PKGBUILD exists only in this clone."
 keep_days = 30
 privilege = "user"
-enabled = false
+max_depth = 2
 
 [[rule]]
-id = "aur.aurutils.cache"
+id = "aur.trizen.archives"
 section = "aur"
-kind = "dir-sweep"
-root = "{cache}/aurutils"
-evidence = "Repository sync scratch space, rebuilt from the AUR on the next sync."
-recoverable = true
-keep_days = 0
-requires = ["bin:aurutils"]
-privilege = "user"
-
-[[rule]]
-id = "aur.trizen.cache"
-section = "aur"
-kind = "dir-sweep"
+kind = "file-pattern"
 root = "{cache}/trizen"
-evidence = "Build scratch space; a missing package is cloned again from the AUR."
+pattern = "*.pkg.tar.*"
+evidence = "makepkg reproduces the archive from the PKGBUILD that stays in the clone; the installed package and the AUR recipe are untouched."
 recoverable = true
-keep_days = 0
-requires = ["bin:trizen"]
+keep_days = 7
 privilege = "user"
+max_depth = 2
+
+[[rule]]
+id = "aur.trizen.clones"
+section = "aur"
+kind = "report-only"
+root = "{cache}/trizen"
+evidence = "Reported, never deleted: a user-edited PKGBUILD exists only in this clone."
+keep_days = 30
+privilege = "user"
+max_depth = 2

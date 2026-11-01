@@ -102,6 +102,20 @@ enum Command {
         yes: bool,
     },
 
+    /// Remove built package archives from AUR helper caches.
+    ///
+    /// The clone, the sources and the PKGBUILD stay: an edited recipe exists
+    /// nowhere else. Only the archive makepkg can build again is removed.
+    Aur {
+        /// Show the plan and stop: no deletion, no operation-log entry.
+        #[arg(long, conflicts_with = "yes")]
+        dry_run: bool,
+
+        /// Apply the plan without asking. Required when stdin is not a terminal.
+        #[arg(long)]
+        yes: bool,
+    },
+
     /// Internal: remove root-owned items on behalf of `clean`.
     ///
     /// Hidden, undocumented and never called by a user. It exists so the
@@ -185,6 +199,15 @@ fn main() -> ExitCode {
             dry_run,
             yes,
             privileged,
+        ),
+        Command::Aur { dry_run, yes } => pipeline::run(
+            pipeline::Scope::AUR,
+            cli.json,
+            cli.verbose,
+            &[],
+            dry_run,
+            yes,
+            false,
         ),
         Command::Installer { dry_run, yes } => pipeline::run(
             pipeline::Scope::INSTALLER,

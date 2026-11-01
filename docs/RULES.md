@@ -70,17 +70,19 @@ at startup rather than checked per rule.
 
 ### Sections another command owns
 
-Two sections belong to a command of their own rather than to `clean`:
-`installers` to `sweep installer` and `project-artifacts` to `sweep purge`.
+Three sections belong to a command of their own rather than to `clean`: `aur`
+to `sweep aur`, `installers` to `sweep installer`, and `project-artifacts` to
+`sweep purge`.
 `Section::command()` is the single place that maps a section to its owner, and a
 bare `sweep clean` lists those rules with status `command_scoped` instead of
 scanning them. Naming the section with `--only` still works - that is a user
 asking for it by name, and the report says so.
 
 The split is about the walk, not about danger. `clean` opens paths the rule
-already names; `installer` reads a directory the user fills by hand, and `purge`
-walks project roots looking for a manifest. Each needs its own preview and its
-own confirmation, and neither belongs in a bare `clean`.
+already names; `installer` reads a directory the user fills by hand, `aur` has to
+explain why the clone beside the archive is kept, and `purge` walks project roots
+looking for a manifest. Each needs its own preview and its own confirmation, and
+none belongs in a bare `clean`.
 
 ### Opt-in sections
 

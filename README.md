@@ -38,8 +38,8 @@
 | M4b | `paccache` keep-versions semantics, rotated logs | done |
 | M5a | project artifacts: the manifest-gated `purge` | done |
 | M5b | `installer`: downloaded package and image files | done |
-| M5c | large files, `aur` | next |
-| M6 | TUI: `analyze`, `status` | planned |
+| M5c | AUR helper caches: `aur` | done |
+| M6 | TUI: `analyze`, `status`, the large-file report | planned |
 | M7 | `uninstall`, `optimize`, `history`, snapshot report | planned |
 | M8 | packaging, man page, completions | planned |
 
@@ -101,19 +101,19 @@ silently cleans nothing on a large fraction of machines. The resolved physical
 path is re-tested against the same list, deny-only, and the delete happens
 through a directory handle opened with `RESOLVE_NO_SYMLINKS`.
 
-The full contract — including the ten residual risks that are *not* solved —
+The full contract — including the eleven residual risks that are *not* solved —
 is in [`docs/SAFETY.md`](docs/SAFETY.md).
 
 ## The rules
 
 The catalog is TOML, and it is data rather than code: `rules/01-system.toml`
-through `rules/17-model-caches.toml`, 108 rules over seventeen sections, 91
+through `rules/17-model-caches.toml`, 109 rules over seventeen sections, 94
 enabled in this build. Each rule names a root, a kind, a retention and the
 sentence that justifies deleting there.
 
 ```bash
 $ sweep rules list
-sweep rules — 17 packs, 108 rules, 91 enabled
+sweep rules — 17 packs, 109 rules, 94 enabled
 
   section            rules  enabled
   system                 8        5
@@ -189,6 +189,24 @@ the one place sweep unlinks a link, and it is why the venv's `bin/python3` and
 paths the rule already names; `purge` walks your home, so it needs its own
 preview and its own confirmation. A bare `sweep clean` lists the section as
 `belongs to another command` instead of scanning it.
+
+### An AUR clone is a recipe, not a cache
+
+`sweep aur` removes the `.pkg.tar.*` archives that `paru`, `yay` and `trizen`
+build under `~/.cache`, and nothing else in those directories. The clone, the
+`PKGBUILD` and the sources stay.
+
+The distinction is what the files are for. A `PKGBUILD` you edited exists
+nowhere else — not in the AUR, not in the binary package — so a directory sweep
+of a helper cache can destroy work that took an hour to get right. The archive
+beside it is output: `makepkg` rebuilds it from the recipe that stays. Sources
+are kept for a subtler reason: if upstream republished a tarball, the cached
+copy is the one whose checksum still matches, so deleting it can leave a package
+that no longer builds until the recipe is fixed by hand.
+
+The clone directories are still reported, with their size and with the sentence
+saying they were not taken. "There is 12 GiB here you can't have automatically,
+and here is why" is a more useful answer than silence.
 
 ### An installer is not the installed program
 
@@ -284,9 +302,9 @@ cargo build --release
 | `sweep clean --privileged` | also sweep root-owned system caches, through `run0` or `sudo` | works |
 | `sweep purge` | `node_modules`, `target`, virtualenvs — only where a manifest says a build made them | works |
 | `sweep installer` | package and image files in `~/Downloads` that were never touched again | works |
-| `sweep analyze` / `status` | disk explorer, health summary | M6 |
+| `sweep analyze` / `status` | disk explorer, health summary, files over a gigabyte | M6 |
 | `sweep uninstall` / `optimize` / `history` | package removal, maintenance, past actions | M7 |
-| `sweep aur` | AUR package cleanup | M5c |
+| `sweep aur` | built `.pkg.tar.*` archives in helper caches; clones and sources are reported, never taken | works |
 
 `sweep clean` is two phases. It plans — load the catalog, scan the roots,
 validate every candidate — and only then asks. The question is skipped with

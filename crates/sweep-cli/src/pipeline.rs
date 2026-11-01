@@ -83,6 +83,11 @@ impl Scope {
         sections: Sections::Assigned(Section::ProjectArtifacts),
     };
 
+    pub const AUR: Scope = Scope {
+        command: "aur",
+        sections: Sections::Assigned(Section::Aur),
+    };
+
     pub const INSTALLER: Scope = Scope {
         command: "installer",
         sections: Sections::Assigned(Section::Installers),
@@ -1238,9 +1243,14 @@ fn execute(
 
     if rule.kind == Kind::ReportOnly {
         run.status = Status::ReportOnly;
+        // The numbers stay in `detail` rather than `run.items`/`run.bytes`:
+        // those columns count what the plan will remove, and a reported entry is
+        // never planned. Putting them in the table would make the section totals
+        // promise a reclaim that `--dry-run` then refuses to perform.
         run.detail = Some(format!(
-            "{} entries would be measured, never deleted",
-            collected.entries.len()
+            "{} entries, {} measured, never deleted",
+            collected.entries.len(),
+            human_bytes(collected.bytes)
         ));
         return run;
     }

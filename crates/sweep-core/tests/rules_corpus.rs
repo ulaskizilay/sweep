@@ -288,7 +288,7 @@ fn the_catalog_digest_is_unchanged() {
 
     // Update this value in the same commit as the rule change, so the review
     // diff shows the catalog moved on purpose.
-    const EXPECTED: u64 = 0x1cb5_e4be_1518_a03a;
+    const EXPECTED: u64 = 0x2e18_01ea_6a57_ef58;
     assert_eq!(
         format!("{hash:016x}"),
         format!("{EXPECTED:016x}"),

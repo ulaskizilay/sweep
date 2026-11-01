@@ -129,6 +129,7 @@ impl Section {
     /// disagree about who owns it.
     pub fn command(self) -> Option<&'static str> {
         match self {
+            Section::Aur => Some("aur"),
             Section::Installers => Some("installer"),
             Section::ProjectArtifacts => Some("purge"),
             _ => None,

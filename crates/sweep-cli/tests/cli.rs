@@ -1286,6 +1286,162 @@ fn only_restricts_the_run_to_the_named_sections() {
     );
 }
 
+// ------------------------------------------------------------------ aur ---
+
+fn age_file(path: &Path, days: u64) {
+    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400);
+    std::fs::File::options()
+        .read(true)
+        .open(path)
+        .expect("open")
+        .set_times(std::fs::FileTimes::new().set_modified(when))
+        .expect("set mtime");
+}
+
+#[test]
+fn aur_takes_the_built_archive_and_leaves_the_recipe_beside_it() {
+    let home = home();
+    write(
+        home.path(),
+        ".cache/paru/clone/tool/PKGBUILD",
+        "pkgname=tool",
+    );
+    write(
+        home.path(),
+        ".cache/paru/clone/tool/tool-1.0-1-x86_64.pkg.tar.zst",
+        "archive",
+    );
+    write(
+        home.path(),
+        ".cache/paru/clone/tool/tool-1.0-1-x86_64.pkg.tar.zst.sig",
+        "signature",
+    );
+    // The source makepkg downloaded is not output: if upstream republished the
+    // tarball, this copy is the one whose checksum still matches.
+    write(
+        home.path(),
+        ".cache/paru/clone/tool/tool-1.0.tar.gz",
+        "source",
+    );
+    write(
+        home.path(),
+        ".cache/paru/clone/tool/.git/config",
+        "[remote]",
+    );
+    // Built minutes ago: it may be about to be installed with `pacman -U`.
+    write(
+        home.path(),
+        ".cache/paru/clone/tool/fresh-1.0-1-x86_64.pkg.tar.zst",
+        "archive",
+    );
+    write(home.path(), ".cache/yay/other/PKGBUILD", "pkgname=other");
+    write(
+        home.path(),
+        ".cache/yay/other/other-1.0-1-x86_64.pkg.tar.zst",
+        "archive",
+    );
+
+    for relative in [
+        ".cache/paru/clone/tool/tool-1.0-1-x86_64.pkg.tar.zst",
+        ".cache/paru/clone/tool/tool-1.0-1-x86_64.pkg.tar.zst.sig",
+        ".cache/paru/clone/tool/tool-1.0.tar.gz",
+        ".cache/paru/clone/tool/PKGBUILD",
+        ".cache/paru/clone/tool/.git/config",
+        ".cache/yay/other/PKGBUILD",
+        ".cache/yay/other/other-1.0-1-x86_64.pkg.tar.zst",
+    ] {
+        age_file(&home.path().join(relative), 60);
+    }
+
+    let before = snapshot(home.path());
+    let dry = run_in(home.path(), &["aur", "--dry-run", "-v"]);
+    assert_eq!(dry.code, Some(0), "stderr: {}", dry.stderr);
+    assert!(
+        dry.stdout
+            .contains("sweep aur — dry run, nothing is deleted"),
+        "the header must name the command:\n{}",
+        dry.stdout
+    );
+    assert!(
+        dry.stdout.contains("never deleted"),
+        "the clone directory is reported, not swept:\n{}",
+        dry.stdout
+    );
+    assert_eq!(before, snapshot(home.path()), "a dry run writes nothing");
+
+    let applied = run_in(home.path(), &["aur", "--yes"]);
+    assert_eq!(applied.code, Some(0), "stderr: {}", applied.stderr);
+
+    for gone in [
+        ".cache/paru/clone/tool/tool-1.0-1-x86_64.pkg.tar.zst",
+        ".cache/yay/other/other-1.0-1-x86_64.pkg.tar.zst",
+    ] {
+        assert!(
+            !home.path().join(gone).exists(),
+            "the built archive is reproducible and must be gone: {gone}"
+        );
+    }
+    for kept in [
+        ".cache/paru/clone/tool/PKGBUILD",
+        ".cache/paru/clone/tool/tool-1.0.tar.gz",
+        ".cache/paru/clone/tool/.git/config",
+        ".cache/paru/clone/tool/fresh-1.0-1-x86_64.pkg.tar.zst",
+        ".cache/yay/other/PKGBUILD",
+    ] {
+        assert!(
+            home.path().join(kept).exists(),
+            "nothing but the built archive may be removed: {kept}"
+        );
+    }
+
+    let rows = log_rows(home.path());
+    assert!(!rows.is_empty(), "an applied aur run must be logged");
+    for row in &rows {
+        assert_eq!(row["cmd"], "aur", "the log must name the command: {row}");
+        assert!(
+            row["session"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("aur-"),
+            "the session separates aur rows from clean rows: {row}"
+        );
+    }
+}
+
+#[test]
+fn a_bare_clean_names_aur_instead_of_sweeping_helper_caches() {
+    let home = home();
+    write(
+        home.path(),
+        ".cache/paru/clone/tool/tool-1.0-1-x86_64.pkg.tar.zst",
+        "archive",
+    );
+
+    let output = run_in(home.path(), &["clean", "--dry-run", "--json"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("one document");
+    let rule = report["rules"]
+        .as_array()
+        .expect("rules")
+        .iter()
+        .find(|run| run["id"] == "aur.paru.archives")
+        .expect("the rule is listed even when another command owns it");
+    assert_eq!(rule["status"], "command_scoped", "{rule}");
+    assert!(
+        rule["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("sweep aur"),
+        "the skip must name the command to run: {rule}"
+    );
+    assert!(
+        home.path()
+            .join(".cache/paru/clone/tool/tool-1.0-1-x86_64.pkg.tar.zst")
+            .exists(),
+        "a bare clean must not touch AUR helper caches"
+    );
+}
+
 // ------------------------------------------------------------ installer ---
 
 #[test]
