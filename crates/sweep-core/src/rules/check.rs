@@ -292,11 +292,17 @@ pub fn compile(raw: RawRule, pack: &str, xdg: &Xdg) -> Result<Rule, RuleError> {
                 ));
             }
         }
-        // $HOME may only be a root for a file-pattern rule that names literal
-        // text. `.xsession-errors*` is a target; `*` is a way to delete a home
-        // directory one file at a time.
+        // `$HOME` is the narrowest root that is still a home directory, and only
+        // two kinds may name it. `file-pattern` names literal text
+        // (`.xsession-errors*` is a target; `*` is a way to delete a home
+        // directory one file at a time). `project-artifacts` has no pattern and
+        // does not need one: it never names a file to delete, it finds a project
+        // by its manifest and then removes the build output that manifest
+        // produced. The bound is `max_depth <= 6` and, below, a retention that is
+        // never zero.
         if expanded == xdg.home {
-            let allowed = kind == Kind::FilePattern && max_depth.unwrap_or(8) <= 6;
+            let allowed = (kind == Kind::FilePattern || kind == Kind::ProjectArtifacts)
+                && max_depth.unwrap_or(8) <= 6;
             let literal = patterns.iter().all(Pattern::has_literal);
             if !allowed {
                 return Err(fail(
@@ -304,12 +310,13 @@ pub fn compile(raw: RawRule, pack: &str, xdg: &Xdg) -> Result<Rule, RuleError> {
                     pack,
                     Some(&label),
                     format!(
-                        "root {} is the home directory; only kind = \"file-pattern\" with max_depth <= 6 may use it",
+                        "root {} is the home directory; only kind = \"file-pattern\" or \
+                         \"project-artifacts\" with max_depth <= 6 may use it",
                         expanded.display()
                     ),
                 ));
             }
-            if !literal {
+            if kind == Kind::FilePattern && !literal {
                 return Err(fail(
                     RuleErrorKind::BadPattern,
                     pack,
@@ -386,6 +393,21 @@ pub fn compile(raw: RawRule, pack: &str, xdg: &Xdg) -> Result<Rule, RuleError> {
             Some(&label),
             "kind = \"hf-cache\" needs keep_days > 0: a blob with no snapshot link may belong \
              to a download that has not finished, so \"everything right now\" is not a safe rule"
+                .to_string(),
+        ));
+    }
+
+    // A home-rooted project sweep removes build directories wherever the walk
+    // finds them, and "everything right now" would take the `node_modules` of the
+    // project the user is in the middle of. Any positive window is allowed; zero
+    // is not, and the way to purge one directory now is to root a rule at it.
+    if kind == Kind::ProjectArtifacts && expanded == xdg.home && keep_days == 0 {
+        return Err(fail(
+            RuleErrorKind::UnsafeRetention,
+            pack,
+            Some(&label),
+            "a home-rooted kind = \"project-artifacts\" needs keep_days > 0: every build \
+             directory below $HOME is a project someone may be working in right now"
                 .to_string(),
         ));
     }

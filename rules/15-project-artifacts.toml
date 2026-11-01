@@ -1,34 +1,44 @@
 # Build artifacts inside project directories - the source of `sweep purge`.
 #
 # This section belongs to `purge`, not `clean`: a project is something the user
-# chose to work on, and its artifacts are removed by walking project roots rather
-# than the home directory. Declaring it here keeps one catalog, and the kind that
-# does the work (manifest-gated discovery) lands with `purge` in M5.
+# chose to work on, and its artifacts are found by walking project roots rather
+# than by opening one cache path. `Section::is_command_scoped()` keeps a bare
+# `sweep clean` out of it, and `sweep clean --only project-artifacts` still works
+# for a user who asks for it by name.
 #
-# The protection rules that will govern it, taken from the same evidence model:
+# The evidence model, which is what makes this safe to point at `$HOME`:
 #
 #   * a directory is a project root only if a manifest is present:
 #     package.json, Cargo.toml, go.mod, pyproject.toml, pom.xml, build.gradle,
 #     Gemfile, terragrunt.hcl, composer.json, .git
-#   * `.git` is never a target, and a git worktree root is never a target
-#   * `bin` and `vendor` need a matching manifest; being named `bin` is not proof
-#   * `target` needs Cargo.toml or pom.xml
-#   * ~/.cargo, ~/.rustup, ~/go/pkg/mod and /usr/src are never scanned
+#   * an artifact is selected only when the manifest that produces it is beside
+#     it: `target` needs Cargo.toml or pom.xml, `node_modules` needs package.json,
+#     `.venv` needs a Python manifest, `vendor` needs go.mod, composer.json or
+#     Gemfile. A `node_modules` with no package.json is reported and left alone.
+#   * `.git` is never a target, and the walk never descends into an artifact: a
+#     published package ships its own package.json, and "the project inside
+#     node_modules" is not one the user opened
+#   * ~/.cargo, ~/.rustup, ~/.cache, node_modules and target are never walked
 #   * depth 6, no symlink following, no crossing a mount
+#   * one artifact is all-or-nothing: if any part of its tree could not be read,
+#     the whole artifact is left alone rather than half-removed
 #
-# Until that exists this rule is a report-only placeholder and stays disabled.
+# `keep_days = 30` is a floor, not a policy: installing a dependency updates the
+# artifact directory, so a directory older than a month has not been touched by a
+# build since then. `keep_days = 0` is refused on a `$HOME` root - the project you
+# are in the middle of is the one you least want emptied.
 
 [meta]
 name = "project-artifacts"
-description = "node_modules, target, venv and friends, manifest-gated - lands with purge in M5"
+description = "node_modules, target, venv and friends, found by the manifest that produces them"
 
 [[rule]]
-id = "project.artifacts.report"
+id = "project.artifacts.sources"
 section = "project-artifacts"
-kind = "report-only"
+kind = "project-artifacts"
 root = "{home}"
-evidence = "Reported, never deleted: a project directory is identified by a manifest, not by its name."
+evidence = "A build artifact is produced by the manifest in the same directory and comes back with one install command; the manifest and every other file stay."
+recoverable = true
 keep_days = 30
 privilege = "user"
 max_depth = 6
-enabled = false

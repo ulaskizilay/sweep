@@ -109,6 +109,7 @@ the file. `..` is refused for the same reason.
 | `tool-cache` | every entry below the root, **and then the root** | must be 0: everything goes |
 | `hf-cache` | blobs no `snapshots/` link resolves to, plus abandoned `*.incomplete` downloads | must be > 0 |
 | `pkg-cache` | every package version outside the newest `keep_versions`, and its detached `.sig` | `keep_versions` required; `keep_days` is a recency floor |
+| `project-artifacts` | build directories inside project roots, found by the manifest beside them, plus symbolic links inside them | applied; must be > 0 on a `{home}` root |
 | `report-only` | nothing; counts entries and bytes | informational |
 
 A retention the kind cannot read is a load error (`ignored_keep_days`), not a
@@ -200,7 +201,7 @@ Every check below applies to the built-in packs and to the overlay equally.
 | `bad_id` | the id is empty, longer than 64 bytes, or has a character outside `[a-z0-9._-]` |
 | `duplicate_id` | the id already exists — including a built-in id, so the overlay cannot replace one |
 | `unknown_section` | the section is not one of the sixteen |
-| `unknown_kind` | the kind is not one of the seven |
+| `unknown_kind` | the kind is not one of the eight |
 | `unsupported_kind` | the kind exists but is not implemented yet (`if-missing-owner`) |
 | `bad_privilege` | the value is neither `user` nor `root` |
 | `template` | the root is relative, empty, contains `..` or a control byte, mixes a variable with text, or names an unknown variable |
@@ -208,7 +209,7 @@ Every check below applies to the built-in packs and to the overlay equally.
 | `bare_root` | a deleting rule resolves to a base directory, to `/`, or to a kernel pseudo-filesystem |
 | `missing_evidence` | a deleting rule has no `evidence` line |
 | `zero_keep_days` | `keep_days = 0` without `recoverable = true` |
-| `unsafe_retention` | `kind = "hf-cache"` with `keep_days = 0`: a blob with no snapshot link may be a download that has not finished |
+| `unsafe_retention` | `kind = "hf-cache"` with `keep_days = 0` (a blob with no snapshot link may be a download that has not finished), or `kind = "project-artifacts"` rooted at `{home}` with `keep_days = 0` (every build directory below `$HOME` is a project someone may be in right now) |
 | `root_privilege` | `privilege = "root"` on a deleting rule outside the `system` section |
 | `missing_pattern` | `kind = "file-pattern"` with no `pattern` |
 | `unused_pattern` | `pattern` on a kind that does not read it |
@@ -227,9 +228,52 @@ Two of these carry a wider meaning:
   residual sweep: applications must tolerate losing cache data, and seven idle
   days is measured rather than assumed. Without the age gate, one rule would
   mean "empty the cache, always".
-- **`{home}` may only be a root for `file-pattern`, with `max_depth <= 6` and a
-  pattern that names literal text.** `.xsession-errors*` is a target; `*` is a
-  way to delete a home directory one file at a time.
+- **`{home}` may only be a root for `file-pattern` or `project-artifacts`, with
+  `max_depth <= 6`, and a `file-pattern` must name literal text.**
+  `.xsession-errors*` is a target; `*` is a way to delete a home directory one
+  file at a time. `project-artifacts` has no pattern to widen: it never names a
+  file, it finds a project by its manifest and then removes the build output
+  that manifest produced, and a `{home}` root also needs `keep_days > 0`.
+
+### The `project-artifacts` rule, precisely
+
+A build directory is not evidence of anything on its own. `node_modules` may be
+a vendored directory someone wrote by hand; `target` may be a data folder. The
+rule therefore reads manifests, not names:
+
+* a **project root** is a directory containing one of `package.json`,
+  `Cargo.toml`, `go.mod`, `pyproject.toml`, `pom.xml`, `build.gradle`,
+  `Gemfile`, `terragrunt.hcl`, `composer.json` or `.git`;
+* an **artifact** is selected only when the manifest that produces it is in the
+  same directory — `node_modules` needs `package.json`, `target` needs
+  `Cargo.toml` or `pom.xml`, `.venv`/`venv` needs a Python manifest, `vendor`
+  needs `go.mod`, `composer.json` or `Gemfile`, and so on;
+* `.git` is never a target, and the walk never descends into an artifact, so the
+  `package.json` shipped inside a dependency does not turn it into a project;
+* `~/.cargo`, `~/.rustup`, `~/.cache`, `~/.local`, `node_modules` and `target`
+  are never walked as project roots;
+* depth is bounded by `max_depth`, links are not followed, and a mount is not
+  crossed.
+
+`keep_days` is a recency floor, not an age filter in the usual sense: installing
+a dependency updates the artifact directory, so a directory older than a month
+has not been touched by a build since then. `keep_days = 0` is refused on a
+`{home}` root — the project you are in the middle of is the one you least want
+emptied — and any positive window is allowed.
+
+One artifact is all-or-nothing. If any entry below it cannot be read, or the
+walk hits its entry or time budget, the whole artifact is left in place and
+counted under "left alone", with the reason. A partially removed `target/` is
+neither built nor clean, so it is the one outcome worth refusing.
+
+Symbolic links inside an artifact are planned as links and removed as links. The
+plan records that the entry was a link, and the funnel unlinks the entry itself;
+the target is never opened and never followed. This is a policy flag the pipeline
+sets when the run includes `project-artifacts`, not a rule key: Node's `.bin`
+directory and a virtualenv's `bin/python3` are links the package manager wrote,
+and a sweep that leaves them behind leaves a tree that still looks installed.
+Every other section keeps the default refusal, because a link inside a cache
+root (`~/.cache/foo -> /mnt/big/foo`) is usually the user's own arrangement.
 
 ### The `pkg-cache` rule, precisely
 

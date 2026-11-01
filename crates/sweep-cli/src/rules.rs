@@ -318,7 +318,7 @@ fn render(report: &ListReport, verbose: u8) -> String {
             (None, days) => format!("{days}d"),
         };
         out.push_str(&format!(
-            "    {:<34} {:<13} {:>6}  {:<4}  {}\n",
+            "    {:<34} {:<18} {:>6}  {:<4}  {}\n",
             rule.id, rule.kind, retention, state, rule.resolved_root
         ));
         if verbose > 0 {

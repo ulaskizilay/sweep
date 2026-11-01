@@ -5,8 +5,8 @@
 
 #![deny(unsafe_code)]
 
-mod clean;
 mod doctor;
+mod pipeline;
 mod rules;
 
 use std::process::ExitCode;
@@ -70,6 +70,22 @@ enum Command {
         /// Restrict the run to one or more sections (`--only dev-tools`).
         #[arg(long, value_name = "SECTION")]
         only: Vec<Section>,
+    },
+
+    /// Remove build artifacts from the projects in your home directory.
+    ///
+    /// A directory is only a target when the manifest beside it says the build
+    /// produced it: `node_modules` next to a `package.json`, `target` next to a
+    /// `Cargo.toml`. The manifest is also the recipe, so the artifact comes back
+    /// with one install command.
+    Purge {
+        /// Show the plan and stop: no deletion, no operation-log entry.
+        #[arg(long, conflicts_with = "yes")]
+        dry_run: bool,
+
+        /// Apply the plan without asking. Required when stdin is not a terminal.
+        #[arg(long)]
+        yes: bool,
     },
 
     /// Internal: remove root-owned items on behalf of `clean`.
@@ -147,7 +163,24 @@ fn main() -> ExitCode {
             yes,
             privileged,
             only,
-        } => clean::run(cli.json, cli.verbose, &only, dry_run, yes, privileged),
+        } => pipeline::run(
+            pipeline::Scope::CLEAN,
+            cli.json,
+            cli.verbose,
+            &only,
+            dry_run,
+            yes,
+            privileged,
+        ),
+        Command::Purge { dry_run, yes } => pipeline::run(
+            pipeline::Scope::PURGE,
+            cli.json,
+            cli.verbose,
+            &[],
+            dry_run,
+            yes,
+            false,
+        ),
         Command::Apply => unreachable!("handled before the root refusal"),
     }
 }

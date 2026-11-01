@@ -84,6 +84,13 @@ pub struct PlanItem {
     dev: u64,
     ino: u64,
     is_dir: bool,
+    /// The item was a symbolic link when it was validated.
+    ///
+    /// Recorded because a link is the one target whose removal must not be
+    /// inferred from the path alone: the sink unlinks the link, never its
+    /// target, and an item that was *not* a link must be refused if it became
+    /// one while the user was reading the plan.
+    is_symlink: bool,
 }
 
 impl PlanItem {
@@ -113,6 +120,10 @@ impl PlanItem {
 
     pub fn is_dir(&self) -> bool {
         self.is_dir
+    }
+
+    pub fn is_symlink(&self) -> bool {
+        self.is_symlink
     }
 }
 
@@ -188,6 +199,7 @@ impl Plan {
             dev: meta.dev,
             ino: meta.ino,
             is_dir: meta.is_dir(),
+            is_symlink: meta.is_symlink(),
         });
     }
 

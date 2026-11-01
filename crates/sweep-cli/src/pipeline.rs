@@ -1,4 +1,10 @@
-//! `sweep clean` — plan, confirm, apply.
+//! `sweep clean`, `purge`, `installer`, `aur` — plan, confirm, apply.
+//!
+//! Every one of them is the same pipeline with a different [`Scope`]: which
+//! sections it owns when the user names none, and the command name that appears
+//! in messages, in the plan hash's session and in the operation log. Keeping one
+//! implementation is the point - a second copy of the consent gate is a second
+//! place for it to be wrong.
 //!
 //! The command is two-phase on purpose. [`build`] decides what could go: it
 //! loads the catalog, decides which rules apply to this machine, walks their
@@ -37,10 +43,65 @@ use sweep_core::paths::{first_component, is_within};
 use sweep_core::pkg_cache;
 use sweep_core::privilege::{self, Elevator, SystemElevator};
 use sweep_core::probe::RealProbe;
+use sweep_core::project;
 use sweep_core::rules::{Kind, Privilege, Rule, RuleSet, Section};
 use sweep_core::scan::{self, BlockKind, Collect, Entry, Limits, Select, Spec, Stop};
 use sweep_core::validate::{AllowedRoot, Policy, ValidateCtx};
 use sweep_core::{funnel, Mode, Plan, Xdg};
+
+/// Which sections a command owns when the user does not name any.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sections {
+    /// Everything `clean` owns: the catalog minus the sections that belong to a
+    /// command of their own, and minus the opt-in ones.
+    ///
+    /// A bare `sweep clean` must not walk the user's project directories. Those
+    /// belong to `purge`, which asks about them and explains what a manifest is
+    /// doing there.
+    Clean,
+    /// Exactly one section: `purge` owns `project-artifacts`, and so on.
+    Assigned(Section),
+}
+
+/// One command's view of the pipeline.
+#[derive(Debug, Clone, Copy)]
+pub struct Scope {
+    /// `clean`, `purge`, … Also the operation-log `cmd` field and the session
+    /// prefix, so `sweep history` can separate them later.
+    pub command: &'static str,
+    sections: Sections,
+}
+
+impl Scope {
+    pub const CLEAN: Scope = Scope {
+        command: "clean",
+        sections: Sections::Clean,
+    };
+
+    pub const PURGE: Scope = Scope {
+        command: "purge",
+        sections: Sections::Assigned(Section::ProjectArtifacts),
+    };
+
+    /// The sections this run may touch.
+    ///
+    /// An explicit `--only` wins over the command's own list: `clean --only
+    /// project-artifacts` is a user asking for the sweep by name, and
+    /// `purge --only` does not exist because `purge` owns one section.
+    fn sections(self, only: &[Section]) -> Vec<Section> {
+        if !only.is_empty() {
+            return only.to_vec();
+        }
+        match self.sections {
+            Sections::Assigned(section) => vec![section],
+            Sections::Clean => Section::ALL
+                .iter()
+                .copied()
+                .filter(|section| !section.is_opt_in() && section.command().is_none())
+                .collect(),
+        }
+    }
+}
 
 /// Why a rule contributed nothing. Machine-readable for `--json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -51,6 +112,8 @@ enum Status {
     DeclaredDisabled,
     /// A section that is only swept when the user names it (`--only`).
     OptIn,
+    /// A section owned by another command (`project-artifacts` by `purge`).
+    CommandScoped,
     MissingRequirement,
     NotPresent,
     NotADirectory,
@@ -71,6 +134,7 @@ impl Status {
             Status::ReportOnly => "report-only",
             Status::DeclaredDisabled => "disabled by the catalog",
             Status::OptIn => "opt-in section, not selected",
+            Status::CommandScoped => "belongs to another command",
             Status::MissingRequirement => "tool not installed",
             Status::NotPresent => "path not present",
             Status::NotADirectory => "not a directory",
@@ -256,7 +320,8 @@ struct Refusal {
 }
 
 #[derive(Debug, Serialize)]
-struct CleanReport {
+struct PipelineReport {
+    command: &'static str,
     mode: &'static str,
     plan_hash: String,
     sections: Vec<SectionRun>,
@@ -282,6 +347,7 @@ struct Totals {
 }
 
 pub fn run(
+    scope: Scope,
     json: bool,
     verbose: u8,
     only: &[Section],
@@ -289,10 +355,11 @@ pub fn run(
     yes: bool,
     privileged: bool,
 ) -> ExitCode {
+    let command = scope.command;
     let xdg = match Xdg::from_env() {
         Ok(xdg) => xdg,
         Err(error) => {
-            eprintln!("sweep clean: {error}");
+            eprintln!("sweep {command}: {error}");
             return ExitCode::from(crate::EXIT_UNSUPPORTED_ENVIRONMENT);
         }
     };
@@ -301,7 +368,7 @@ pub fn run(
         Ok(set) => set,
         Err(errors) => {
             eprintln!(
-                "sweep clean: {} load {} refused; run `sweep rules verify` for details",
+                "sweep {command}: {} load {} refused; run `sweep rules verify` for details",
                 errors.len(),
                 if errors.len() == 1 { "error" } else { "errors" }
             );
@@ -315,7 +382,7 @@ pub fn run(
     let mounts = match MountTable::load() {
         Ok(mounts) => mounts,
         Err(error) => {
-            eprintln!("sweep clean: cannot read the mount table: {error}");
+            eprintln!("sweep {command}: cannot read the mount table: {error}");
             return ExitCode::from(crate::EXIT_UNSUPPORTED_ENVIRONMENT);
         }
     };
@@ -323,14 +390,22 @@ pub fn run(
     let probe = match RealProbe::new() {
         Ok(probe) => probe.with_open_scan(),
         Err(error) => {
-            eprintln!("sweep clean: cannot probe this filesystem: {error}");
+            eprintln!("sweep {command}: cannot probe this filesystem: {error}");
             return ExitCode::from(crate::EXIT_UNSUPPORTED_ENVIRONMENT);
         }
     };
 
     let mode = if dry_run { Mode::DryRun } else { Mode::Apply };
-    let Built { plan, mut report } =
-        build(&set, &xdg, &probe, &mounts, only, &Limits::default(), mode);
+    let Built { plan, mut report } = build(
+        scope,
+        &set,
+        &xdg,
+        &probe,
+        &mounts,
+        only,
+        &Limits::default(),
+        mode,
+    );
 
     // Which rules the elevated child may act on. Derived from the loaded
     // catalog rather than from the plan, so an overlay rule can never be sent
@@ -341,7 +416,7 @@ pub fn run(
         // The preview covers the whole plan, including the root-owned half: a
         // dry run that hid half the items because they need a password would
         // report a total that is not the plan.
-        let preview = funnel::apply(&plan, &probe, Mode::DryRun, "clean", None);
+        let preview = funnel::apply(&plan, &probe, Mode::DryRun, command, None);
         report.funnel = FunnelReport::of(&preview, mode);
         let (root_plan, _) = plan.split(|item| privileged_rules.contains(item.rule().as_str()));
         if !root_plan.is_empty() {
@@ -368,15 +443,15 @@ pub fn run(
         return finish(json, verbose, &report, 0);
     }
 
-    match confirm(plan.len(), plan.total_bytes(), yes) {
+    match confirm(command, plan.len(), plan.total_bytes(), yes) {
         Consent::Granted => {}
         Consent::Declined(message) => {
-            eprintln!("sweep clean: {message}");
+            eprintln!("sweep {command}: {message}");
             return ExitCode::from(crate::EXIT_DECLINED);
         }
     }
 
-    let session = format!("clean-{}", now_unix());
+    let session = format!("{command}-{}", now_unix());
     let log_path = xdg.state_dir().join("operations.jsonl");
     let mut oplog = match Oplog::open(&xdg.state_dir(), session.clone()) {
         Ok(log) => {
@@ -403,11 +478,11 @@ pub fn run(
     // a syscall failure when it is a permission boundary doing its job.
     let (root_plan, user_plan) = plan.split(|item| privileged_rules.contains(item.rule().as_str()));
 
-    let applied = funnel::apply(&user_plan, &probe, Mode::Apply, "clean", oplog.as_mut());
+    let applied = funnel::apply(&user_plan, &probe, Mode::Apply, command, oplog.as_mut());
     let mut funnel_report = FunnelReport::of(&applied, mode);
     let mut code = if applied.failed > 0 {
         eprintln!(
-            "sweep clean: {} items could not be removed and were left in place; \
+            "sweep {command}: {} items could not be removed and were left in place; \
              the operation log has the reason for each",
             applied.failed
         );
@@ -419,10 +494,11 @@ pub fn run(
     if !root_plan.is_empty() {
         let requested = root_plan.len();
         let bytes = root_plan.total_bytes();
-        match elevate_consent(requested, bytes, privileged) {
+        match elevate_consent(command, requested, bytes, privileged) {
             Elevation::Granted => match SystemElevator::discover() {
                 Ok(elevator) => {
                     let outcome = apply_root(
+                        command,
                         &root_plan,
                         &privileged_rules,
                         &session,
@@ -433,7 +509,7 @@ pub fn run(
                         Ok(elevated) => {
                             if elevated.failed > 0 {
                                 eprintln!(
-                                    "sweep clean: {} root-owned items could not be removed; \
+                                    "sweep {command}: {} root-owned items could not be removed; \
                                      the operation log has the reason for each",
                                     elevated.failed
                                 );
@@ -466,10 +542,15 @@ pub fn run(
                         }
                         Err(error) => {
                             eprintln!(
-                                "sweep clean: {requested} root-owned items were left in place: \
+                                "sweep {command}: {requested} root-owned items were left in place: \
                                  elevation did not run ({error})"
                             );
-                            skip_unattempted(oplog.as_mut(), &root_plan, "elevation_failed");
+                            skip_unattempted(
+                                oplog.as_mut(),
+                                command,
+                                &root_plan,
+                                "elevation_failed",
+                            );
                             funnel_report.count_skips("elevation_failed", requested);
                             report.notes.push(format!(
                                 "{requested} root-owned items ({}) were left in place because \
@@ -487,8 +568,8 @@ pub fn run(
                     }
                 }
                 Err(error) => {
-                    eprintln!("sweep clean: {error}");
-                    skip_unattempted(oplog.as_mut(), &root_plan, "elevation_unavailable");
+                    eprintln!("sweep {command}: {error}");
+                    skip_unattempted(oplog.as_mut(), command, &root_plan, "elevation_unavailable");
                     funnel_report.count_skips("elevation_unavailable", requested);
                     report.notes.push(format!(
                         "{requested} root-owned items ({}) were left in place: {error}",
@@ -508,7 +589,7 @@ pub fn run(
                 }
             },
             Elevation::Declined(message) => {
-                skip_unattempted(oplog.as_mut(), &root_plan, "not_elevated");
+                skip_unattempted(oplog.as_mut(), command, &root_plan, "not_elevated");
                 funnel_report.count_skips("not_elevated", requested);
                 report.notes.push(format!(
                     "{requested} root-owned items ({}) were left in place: {message}",
@@ -547,6 +628,7 @@ fn privileged_rule_ids(set: &RuleSet) -> BTreeSet<String> {
 /// the request names only root items and that the reply reaches the log — does
 /// not need one.
 fn apply_root(
+    cmd: &str,
     root_plan: &Plan,
     privileged_rules: &BTreeSet<String>,
     session: &str,
@@ -556,22 +638,22 @@ fn apply_root(
     let request = privilege::request_from(
         root_plan,
         |rule| privileged_rules.contains(rule),
-        "clean",
+        cmd,
         session,
     )
     .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no privileged items"))?;
     let reply = elevator.run(&request)?;
-    log_reply(oplog, &reply);
+    log_reply(oplog, cmd, &reply);
     Ok(FunnelReport::of_reply(&reply))
 }
 
 /// Prints the report and returns the exit code the command settled on.
-fn finish(json: bool, verbose: u8, report: &CleanReport, code: u8) -> ExitCode {
+fn finish(json: bool, verbose: u8, report: &PipelineReport, code: u8) -> ExitCode {
     if json {
         match serde_json::to_string_pretty(report) {
             Ok(text) => println!("{text}"),
             Err(error) => {
-                eprintln!("sweep clean: cannot serialise report: {error}");
+                eprintln!("sweep {}: cannot serialise report: {error}", report.command);
                 return ExitCode::FAILURE;
             }
         }
@@ -600,7 +682,7 @@ enum Elevation {
 /// "become root". A script that wants the system half says `--privileged`, and a
 /// run whose stdin is not a terminal declines rather than reaching for sudo on
 /// its own.
-fn elevate_consent(items: usize, bytes: u64, allowed: bool) -> Elevation {
+fn elevate_consent(command: &str, items: usize, bytes: u64, allowed: bool) -> Elevation {
     if allowed {
         return Elevation::Granted;
     }
@@ -616,7 +698,7 @@ fn elevate_consent(items: usize, bytes: u64, allowed: bool) -> Elevation {
     }
 
     eprint!(
-        "sweep clean: {items} of these items ({}) are root-owned.\n\
+        "sweep {command}: {items} of these items ({}) are root-owned.\n\
          Elevate with run0/sudo to remove them? [y/N] ",
         human_bytes(bytes)
     );
@@ -645,7 +727,7 @@ fn elevate_consent(items: usize, bytes: u64, allowed: bool) -> Elevation {
 }
 
 /// Writes one `SKIPPED` row per item that was never attempted.
-fn skip_unattempted(oplog: Option<&mut Oplog>, plan: &Plan, code: &str) {
+fn skip_unattempted(oplog: Option<&mut Oplog>, cmd: &str, plan: &Plan, code: &str) {
     let Some(log) = oplog else {
         return;
     };
@@ -655,7 +737,7 @@ fn skip_unattempted(oplog: Option<&mut Oplog>, plan: &Plan, code: &str) {
         let (path, path_hex) = encode_path(item.literal());
         log.append(Record {
             ts: ts.clone(),
-            cmd: "clean",
+            cmd,
             session: &session,
             action: Action::Skipped,
             rule: item.rule().as_str(),
@@ -675,7 +757,7 @@ fn skip_unattempted(oplog: Option<&mut Oplog>, plan: &Plan, code: &str) {
 /// The child never writes the log itself: root opening a file inside the user's
 /// state directory is a worse arrangement than trusting this binary's own output
 /// on a pipe, which is what it is.
-fn log_reply(oplog: Option<&mut Oplog>, reply: &privilege::Reply) {
+fn log_reply(oplog: Option<&mut Oplog>, cmd: &str, reply: &privilege::Reply) {
     let Some(log) = oplog else {
         return;
     };
@@ -691,7 +773,7 @@ fn log_reply(oplog: Option<&mut Oplog>, reply: &privilege::Reply) {
         };
         log.append(Record {
             ts: ts.clone(),
-            cmd: "clean",
+            cmd,
             session: &session,
             action: result.action,
             rule: &result.rule,
@@ -710,7 +792,7 @@ fn log_reply(oplog: Option<&mut Oplog>, reply: &privilege::Reply) {
 /// would otherwise answer the prompt with whatever its stdin happens to be. It
 /// is a refusal rather than an automatic yes, and it names the flag that turns
 /// the question off.
-fn confirm(items: usize, bytes: u64, yes: bool) -> Consent {
+fn confirm(command: &str, items: usize, bytes: u64, yes: bool) -> Consent {
     if yes {
         return Consent::Granted;
     }
@@ -723,7 +805,7 @@ fn confirm(items: usize, bytes: u64, yes: bool) -> Consent {
     }
 
     eprint!(
-        "sweep clean will permanently remove {items} items ({}).\nContinue? [y/N] ",
+        "sweep {command} will permanently remove {items} items ({}).\nContinue? [y/N] ",
         human_bytes(bytes)
     );
     let _ = io::stderr().flush();
@@ -737,11 +819,10 @@ fn confirm(items: usize, bytes: u64, yes: bool) -> Consent {
             if answer == "y" || answer == "yes" {
                 Consent::Granted
             } else {
-                Consent::Declined(
-                    "cancelled; nothing was removed. Run `sweep clean --dry-run` to review \
+                Consent::Declined(format!(
+                    "cancelled; nothing was removed. Run `sweep {command} --dry-run` to review \
                      the plan first."
-                        .to_string(),
-                )
+                ))
             }
         }
         Err(error) => Consent::Declined(format!(
@@ -752,10 +833,12 @@ fn confirm(items: usize, bytes: u64, yes: bool) -> Consent {
 
 struct Built {
     plan: Plan,
-    report: CleanReport,
+    report: PipelineReport,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build(
+    scope: Scope,
     set: &RuleSet,
     xdg: &Xdg,
     probe: &RealProbe,
@@ -764,6 +847,13 @@ fn build(
     limits: &Limits,
     mode: Mode,
 ) -> Built {
+    let command = scope.command;
+    let sections = scope.sections(only);
+    // The report lists every rule the user asked to see; `sections` decides
+    // which of them may run. That is what lets a bare `clean` say
+    // "project-artifacts belongs to `sweep purge`" instead of hiding the
+    // capability, and it is why the rule list and the section filter cannot
+    // drift apart.
     let selected = set.select(only, xdg);
     let now = now_unix();
 
@@ -800,10 +890,21 @@ fn build(
         xdg,
         probe,
         allowed: &allowed,
-        // `clean` deletes what it plans, so the policy is the strict one. Dry
-        // run is a *mode of the funnel*, not a weaker policy: the preview must
-        // exercise exactly the checks the real run will.
-        policy: Policy::default(),
+        // The pipeline deletes what it plans, so the policy is the strict one.
+        // Dry run is a *mode of the funnel*, not a weaker policy: the preview
+        // must exercise exactly the checks the real run will.
+        //
+        // One exception, and it is narrower than it looks: a run that may touch
+        // `project-artifacts` may unlink a symbolic link. `node_modules/.bin`
+        // and a virtualenv's `bin/python3` are links the package manager wrote,
+        // and a sweep that leaves them behind leaves a tree that still looks
+        // installed. The flag alone cannot put a link in a plan - only the
+        // artifact walk emits one - and the sink unlinks the link, never its
+        // target. Every other command keeps the refusal.
+        policy: Policy {
+            allow_leaf_symlink: sections.contains(&Section::ProjectArtifacts),
+            ..Policy::default()
+        },
     };
 
     let mut plan = Plan::new();
@@ -812,8 +913,12 @@ fn build(
 
     for rule in &selected {
         let root = rule.expanded_root(xdg);
-        match skip_reason(rule, xdg, only) {
-            Some(status) => runs.push(base_run(rule, status, skip_detail(rule, xdg, status))),
+        match skip_reason(rule, xdg, &sections) {
+            Some(status) => runs.push(base_run(
+                rule,
+                status,
+                skip_detail(command, rule, xdg, status),
+            )),
             None => runs.push(execute(
                 rule, &root, probe, &ctx, limits, &mut plan, &roots, now,
             )),
@@ -854,7 +959,7 @@ fn build(
         // Nothing in these sections is scanned, so the note must not imply a
         // size: the number only exists once the user asks for that section.
         notes.push(format!(
-            "{} {} opt-in and was not scanned; `sweep clean --only {}` reviews it",
+            "{} {} opt-in and was not scanned; `sweep {command} --only {}` reviews it",
             opt_in.join(", "),
             if opt_in.len() == 1 { "is" } else { "are" },
             opt_in.join(" --only ")
@@ -950,7 +1055,8 @@ fn build(
 
     let refusals = summarise_refusals(&plan);
     Built {
-        report: CleanReport {
+        report: PipelineReport {
+            command,
             mode: if mode.is_dry_run() {
                 "dry-run"
             } else {
@@ -980,15 +1086,21 @@ fn touches_copy_on_write(roots: &[PathBuf], mounts: &MountTable) -> bool {
 }
 
 /// Why a rule contributed nothing before it was scanned.
-fn skip_reason(rule: &Rule, xdg: &Xdg, only: &[Section]) -> Option<Status> {
+fn skip_reason(rule: &Rule, xdg: &Xdg, sections: &[Section]) -> Option<Status> {
     if !rule.enabled {
         return Some(Status::DeclaredDisabled);
+    }
+    // A section another command owns is not missing and not empty; it is out of
+    // this command's scope. Saying so is what makes `sweep clean` explain
+    // `purge` rather than silently under-report.
+    if rule.section.command().is_some() && !sections.contains(&rule.section) {
+        return Some(Status::CommandScoped);
     }
     // Model weights are the one target that may not be re-downloadable, so the
     // section is skipped unless the user named it. The rules stay enabled: the
     // section name *is* the consent, and there is no second switch to keep in
     // sync with it.
-    if rule.section.is_opt_in() && !only.contains(&rule.section) {
+    if rule.section.is_opt_in() && !sections.contains(&rule.section) {
         return Some(Status::OptIn);
     }
     if rule.missing_requirement(xdg).is_some() {
@@ -997,14 +1109,18 @@ fn skip_reason(rule: &Rule, xdg: &Xdg, only: &[Section]) -> Option<Status> {
     None
 }
 
-fn skip_detail(rule: &Rule, xdg: &Xdg, status: Status) -> Option<String> {
+fn skip_detail(command: &str, rule: &Rule, xdg: &Xdg, status: Status) -> Option<String> {
     match status {
         Status::MissingRequirement => rule
             .missing_requirement(xdg)
             .map(|requirement| format!("requires {}", requirement.label())),
         Status::OptIn => Some(format!(
-            "run `sweep clean --only {}` to review it",
+            "run `sweep {command} --only {}` to review it",
             rule.section.as_str()
+        )),
+        Status::CommandScoped => Some(format!(
+            "this section belongs to `sweep {}`",
+            rule.section.command().unwrap_or("clean")
         )),
         _ => None,
     }
@@ -1059,6 +1175,9 @@ fn execute(
     }
     if rule.kind == Kind::PkgCache {
         return execute_pkg(rule, root, probe, ctx, limits, plan, now);
+    }
+    if rule.kind == Kind::ProjectArtifacts {
+        return execute_project(rule, root, probe, ctx, limits, plan, now);
     }
 
     // Roots another enabled rule owns: the residual cache sweep must not take a
@@ -1140,7 +1259,9 @@ fn execute(
             paths
         }
         Kind::DirAge => age_candidates(rule, &collected, root, now, &mut run),
-        Kind::HfCache | Kind::PkgCache => unreachable!("handled before the walk"),
+        Kind::HfCache | Kind::PkgCache | Kind::ProjectArtifacts => {
+            unreachable!("handled before the walk")
+        }
     };
     // Children first is the plan's job (`Plan::finish` sorts deepest-first); the
     // walk already emits post-order, so this stays readable even before sorting.
@@ -1155,6 +1276,177 @@ fn execute(
         }
     }
     run
+}
+
+/// Build artifacts inside project directories.
+///
+/// The discovery is [`sweep_core::project`]: a manifest names the project, the
+/// manifest that produces a directory names the artifact. This function is the
+/// second half - for each artifact it walks the tree completely, refuses the
+/// whole artifact if the walk saw anything it could not take, and plans every
+/// entry plus the artifact directory itself.
+///
+/// Two decisions are worth stating:
+///
+/// * **All or nothing per artifact.** `node_modules` with one unreadable
+///   directory would be left as a half-installed tree, which is worse than
+///   either state. A partial walk therefore plans nothing and the artifact is
+///   counted, with its reason, in the detail line.
+/// * **Links are included.** `node_modules/.bin` and a virtualenv's
+///   `bin/python3` are links the package manager wrote. Leaving them behind is
+///   what makes a "purged" directory still look installed. The plan records each
+///   one as a link, and the sink unlinks the link, never its target.
+fn execute_project(
+    rule: &Rule,
+    root: &Path,
+    probe: &RealProbe,
+    ctx: &ValidateCtx<'_>,
+    limits: &Limits,
+    plan: &mut Plan,
+    now: i64,
+) -> RuleRun {
+    let found = project::discover(root, rule.max_depth, rule.keep_days, now, limits, probe);
+    let mut run = base_run(rule, Status::Planned, None);
+    run.scanned_bytes = found.bytes_visited;
+
+    if found.missing_root {
+        run.status = Status::NotPresent;
+        return run;
+    }
+    if found.root_is_symlink {
+        run.status = Status::SymlinkedRoot;
+        run.detail = Some(
+            "a symlinked project root is not followed; point the rule at the real directory".into(),
+        );
+        return run;
+    }
+    if found.not_a_directory {
+        run.status = Status::NotADirectory;
+        return run;
+    }
+    if found.root_unreadable {
+        run.status = Status::Unreadable;
+        run.detail = unreadable_detail(rule);
+        return run;
+    }
+    if found.stop != Stop::Complete {
+        run.status = Status::ScanIncomplete;
+        run.detail = Some(match found.stop {
+            Stop::EntryBudget => "entry budget exhausted".to_string(),
+            Stop::TimeBudget => "time budget exhausted".to_string(),
+            Stop::Complete => unreachable!("checked above"),
+        });
+        return run;
+    }
+
+    // Artifacts the discovery already left alone are in `found.skipped`; this
+    // counts only the ones that passed discovery and then could not be
+    // enumerated completely.
+    let mut walk_skipped = 0usize;
+    for artifact in &found.artifacts {
+        let mut spec = Spec::new(usize::MAX, limits);
+        spec.include_links = true;
+        let collected = scan::collect(&artifact.path, &artifact.path, 0, &spec, probe);
+        if collected.stop != Stop::Complete
+            || collected.root_unreadable
+            || !collected.blocked.is_empty()
+        {
+            // Unknown is not empty. A tree whose contents could not be
+            // enumerated would be left half-removed, so it is left whole.
+            walk_skipped += 1;
+            continue;
+        }
+        let mut candidates: Vec<&Path> = collected
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_path())
+            .collect();
+        candidates.push(&artifact.path);
+        plan_candidates(plan, ctx, rule, &mut run, candidates);
+    }
+
+    run.detail = Some(project_detail(&found, walk_skipped, rule, root));
+
+    if run.items == 0 && run.refused == 0 {
+        run.status = Status::Empty;
+    }
+    run
+}
+
+/// The one line a user reads about a project sweep.
+///
+/// It names what was taken, and then - the part that matters when the answer is
+/// "why is this still here" - how many artifact-shaped directories were left
+/// alone and why, most frequent reason first.
+fn project_detail(
+    found: &project::Discovery,
+    walk_skipped: usize,
+    rule: &Rule,
+    root: &Path,
+) -> String {
+    let mut names: Vec<String> = found
+        .artifacts
+        .iter()
+        .map(|artifact| {
+            artifact
+                .path
+                .strip_prefix(root)
+                .unwrap_or(&artifact.path)
+                .display()
+                .to_string()
+        })
+        .collect();
+    let planned = names.len();
+    names.truncate(3);
+    let mut detail = format!(
+        "{} projects, {planned} build directories older than {}d",
+        found.projects.len(),
+        rule.keep_days
+    );
+    if !names.is_empty() {
+        let more = planned - names.len();
+        detail.push_str(": ");
+        detail.push_str(&names.join(", "));
+        if more > 0 {
+            detail.push_str(&format!(" and {more} more"));
+        }
+    }
+
+    // Counts, not names: a machine with forty `node_modules` directories does not
+    // need forty lines, it needs to know that forty were left alone and why.
+    let mut reasons: Vec<(&str, usize)> = Vec::new();
+    let mut record = |reason: &'static str, count: usize| {
+        if count == 0 {
+            return;
+        }
+        match reasons.iter_mut().find(|(existing, _)| *existing == reason) {
+            Some((_, total)) => *total += count,
+            None => reasons.push((reason, count)),
+        }
+    };
+    for entry in &found.skipped {
+        record(entry.reason, 1);
+    }
+    record(
+        "part of the tree could not be read, so the whole artifact was left",
+        walk_skipped,
+    );
+    if reasons.is_empty() {
+        return detail;
+    }
+    reasons.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
+    let total: usize = reasons.iter().map(|(_, count)| count).sum();
+    let mut lines: Vec<String> = reasons
+        .iter()
+        .take(3)
+        .map(|(reason, count)| format!("{reason} ({count})"))
+        .collect();
+    let shown: usize = reasons.iter().take(3).map(|(_, count)| count).sum();
+    if total > shown {
+        lines.push(format!("and {} more", total - shown));
+    }
+    detail.push_str(&format!("; {total} left alone: {}", lines.join(", ")));
+    detail
 }
 
 /// The Hugging Face hub: the one kind whose candidates come from its own reader.
@@ -1508,12 +1800,18 @@ fn summarise_sections(runs: &[RuleRun]) -> Vec<SectionRun> {
         .collect()
 }
 
-fn render(report: &CleanReport, verbose: u8) -> String {
+fn render(report: &PipelineReport, verbose: u8) -> String {
     let mut out = String::new();
     if report.mode == "dry-run" {
-        out.push_str("sweep clean — dry run, nothing is deleted\n\n");
+        out.push_str(&format!(
+            "sweep {} — dry run, nothing is deleted\n\n",
+            report.command
+        ));
     } else {
-        out.push_str("sweep clean — applying the plan, removals are permanent\n\n");
+        out.push_str(&format!(
+            "sweep {} — applying the plan, removals are permanent\n\n",
+            report.command
+        ));
     }
 
     out.push_str(&format!(
@@ -1584,7 +1882,7 @@ fn render(report: &CleanReport, verbose: u8) -> String {
                 .map(|detail| format!("  ({detail})"))
                 .unwrap_or_default();
             out.push_str(&format!(
-                "    {:<34} {:<13} {:>6} {:>9}{detail}\n",
+                "    {:<34} {:<18} {:>6} {:>9}{detail}\n",
                 rule.id,
                 rule.status.label(),
                 rule.items,
@@ -1646,9 +1944,10 @@ fn render(report: &CleanReport, verbose: u8) -> String {
     } else if report.mode == "dry-run" {
         out.push_str(&format!(
             "\n  Preview only: {} items, {} would be removed permanently.\n  \
-             Nothing was deleted. Run `sweep clean` to apply this plan.\n",
+             Nothing was deleted. Run `sweep {}` to apply this plan.\n",
             report.funnel.would_remove,
-            human_bytes(report.funnel.bytes)
+            human_bytes(report.funnel.bytes),
+            report.command
         ));
     }
     out
@@ -1707,14 +2006,22 @@ mod tests {
             .expect("set mtime");
     }
 
-    fn report_for(temp: &tempfile::TempDir, body: &str, limits: &Limits) -> CleanReport {
+    fn report_for(temp: &tempfile::TempDir, body: &str, limits: &Limits) -> PipelineReport {
         let xdg = xdg_at(temp.path());
         let set = RuleSet::from_sources(&[sweep_core::rules::Source::new("test.toml", body)], &xdg)
             .expect("rule pack loads");
         let mounts = MountTable::load().expect("mounts");
         let probe = RealProbe::new().expect("probe").with_open_scan();
-        let Built { plan, mut report } =
-            build(&set, &xdg, &probe, &mounts, &[], limits, Mode::DryRun);
+        let Built { plan, mut report } = build(
+            Scope::CLEAN,
+            &set,
+            &xdg,
+            &probe,
+            &mounts,
+            &[],
+            limits,
+            Mode::DryRun,
+        );
         let preview = funnel::apply(&plan, &probe, Mode::DryRun, "clean", None);
         report.funnel = FunnelReport::of(&preview, Mode::DryRun);
         report
@@ -2020,8 +2327,26 @@ privilege = "user"
         };
         let limits = Limits::default();
 
-        let dry = build(&set(), &xdg, &probe, &mounts, &[], &limits, Mode::DryRun);
-        let apply = build(&set(), &xdg, &probe, &mounts, &[], &limits, Mode::Apply);
+        let dry = build(
+            Scope::CLEAN,
+            &set(),
+            &xdg,
+            &probe,
+            &mounts,
+            &[],
+            &limits,
+            Mode::DryRun,
+        );
+        let apply = build(
+            Scope::CLEAN,
+            &set(),
+            &xdg,
+            &probe,
+            &mounts,
+            &[],
+            &limits,
+            Mode::Apply,
+        );
 
         // The preview and the run must describe the same plan: a different hash
         // would mean the confirmation prompt asked about something else.
@@ -2130,7 +2455,7 @@ privilege = "user"
             ],
         };
 
-        log_reply(Some(&mut log), &reply);
+        log_reply(Some(&mut log), "clean", &reply);
         drop(log);
 
         let rows = log_rows(&state);
@@ -2158,6 +2483,7 @@ privilege = "user"
         let mounts = MountTable::load().expect("mounts");
         let probe = RealProbe::new().expect("probe").with_open_scan();
         let Built { plan, .. } = build(
+            Scope::CLEAN,
             &set,
             &xdg,
             &probe,
@@ -2170,6 +2496,7 @@ privilege = "user"
 
         let elevator = FakeElevator::answering(privilege::Reply::default());
         let error = apply_root(
+            "clean",
             &plan,
             &privileged_rule_ids(&set),
             "clean-1",
@@ -2205,6 +2532,9 @@ privilege = "user"
     fn a_privileged_run_without_the_flag_is_never_granted_consent() {
         // `--privileged` is the one path that does not consult stdin. Every
         // other path must ask, which is the behaviour a pipe cannot fake.
-        assert!(matches!(elevate_consent(3, 4096, true), Elevation::Granted));
+        assert!(matches!(
+            elevate_consent("clean", 3, 4096, true),
+            Elevation::Granted
+        ));
     }
 }

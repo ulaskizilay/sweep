@@ -487,6 +487,28 @@ floor, so a version fetched recently survives whatever the count says. Making
 this exact needs the package database, which is the `pkg:` requirement the
 loader refuses until M5.
 
+### R11. A build artifact may contain a link the user meant to keep
+
+Unlinking a link is the one removal whose meaning depends on the caller, so the
+policy that permits it is set per run, not per rule. A run that includes
+`project-artifacts` may plan a link; every other run refuses one
+(`Reason::LeafSymlink`). The plan records the fact (`PlanItem::is_symlink`), and
+the funnel unlinks only an item the plan described as a link — a file that became
+a link between the preview and the run is refused.
+
+*What limits it:* the target is never opened, never followed and never removed.
+`unlinkat(..., 0)` on a link removes the entry and nothing else. The policy flag
+alone cannot put anything in a plan; only the artifact walk emits a link.
+*What remains:* a link inside `node_modules` or a virtualenv that the user
+deliberately created pointing at source they still want. The link itself is gone
+and has to be recreated. That is the same consequence as removing the artifact
+around it, since the artifact is the parent that made the link useful, but it is
+a real consequence and it is why the unit is the artifact rather than the file.
+
+*Reported honestly:* the operation log records the link's own bytes (zero for a
+link on most filesystems), not the target's size, because nothing was freed
+there.
+
 ---
 
 ## How to add a rule

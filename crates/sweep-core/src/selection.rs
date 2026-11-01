@@ -103,6 +103,11 @@ impl Selection {
                 paths: Default::default(),
                 complete: true,
             },
+            // A project sweep never crosses the privilege boundary: a build
+            // directory lives in `$HOME`, which the child cannot see, and the
+            // compiler refuses `privilege = "root"` for it outside `system`.
+            // An empty set is the honest answer if one ever arrives here.
+            Kind::ProjectArtifacts => Self::default(),
         }
     }
 
@@ -157,8 +162,10 @@ impl Selection {
                 paths: aged_paths(&collected, root, cutoff),
                 complete: true,
             },
-            // Handled by the scanners; a walk cannot describe them.
-            Kind::PkgCache | Kind::HfCache | Kind::ReportOnly => Self::default(),
+            // Handled by the scanners, or never reached by this process.
+            Kind::PkgCache | Kind::HfCache | Kind::ProjectArtifacts | Kind::ReportOnly => {
+                Self::default()
+            }
         }
     }
 

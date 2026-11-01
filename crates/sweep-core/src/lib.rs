@@ -36,6 +36,7 @@ pub mod plan;
 pub mod policy;
 pub mod privilege;
 pub mod probe;
+pub mod project;
 pub mod rules;
 pub mod scan;
 pub mod selection;

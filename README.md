@@ -36,7 +36,8 @@
 | M3b | model caches: Hugging Face blob/snapshot scanner, opt-in section | done |
 | M4a | system caches through `run0`/`sudo`, the privilege boundary | done |
 | M4b | `paccache` keep-versions semantics, rotated logs | done |
-| M5 | `purge`, `installer`, large files, `aur` | next |
+| M5a | project artifacts: the manifest-gated `purge` | done |
+| M5b | `installer`, large files, `aur` | next |
 | M6 | TUI: `analyze`, `status` | planned |
 | M7 | `uninstall`, `optimize`, `history`, snapshot report | planned |
 | M8 | packaging, man page, completions | planned |
@@ -140,8 +141,8 @@ sweep rules — 16 packs, 107 rules, 89 enabled
     model.whisper.cache            dir-age        90d  on    /home/u/.cache/whisper
 ```
 
-Seven kinds (`dir-sweep`, `dir-age`, `file-pattern`, `tool-cache`, `hf-cache`,
-`pkg-cache`, `report-only`) cover every target. `dir-age` keeps a whole subtree
+Eight kinds (`dir-sweep`, `dir-age`, `file-pattern`, `tool-cache`, `hf-cache`,
+`pkg-cache`, `project-artifacts`, `report-only`) cover every target. `dir-age` keeps a whole subtree
 unless *every* entry in it is idle past the cutoff and nothing in it was left
 alone.
 
@@ -157,6 +158,36 @@ Rules that are wrong do not load: a root inside `/usr`, a duplicate id, a typo
 in a key. A user overlay at `~/.config/sweep/rules.d/*.toml` may add rules but
 not replace a built-in one. The schema, the retention semantics and the full
 list of load-time refusals are in [`docs/RULES.md`](docs/RULES.md).
+
+### Project artifacts need a manifest, not a directory name
+
+`sweep purge` removes the build output of the projects in your home:
+`node_modules`, `target`, `.venv`, `vendor`, `dist`, `build`. The rule does not
+have a list of names to delete; it has a list of manifests, and a directory is
+only a target when the manifest that produces it sits beside it:
+
+```
+web/package.json      + web/node_modules       →  node_modules is a build artifact
+rustproj/Cargo.toml   + rustproj/target        →  target is a build artifact
+stray/node_modules                             →  no manifest, left alone
+```
+
+That gate is what makes it safe to point at `$HOME`. There is no vendor-wide
+prefix, no `find -name node_modules`, and no wildcard that a typo can widen: a
+`node_modules` with no `package.json` is reported as skipped, with the reason.
+`.git` is never a target, and the walk never descends into an artifact, so the
+`package.json` inside a published dependency does not make it a project.
+
+One directory is all-or-nothing. If any part of a `target/` tree cannot be read,
+the whole artifact stays: a half-removed tree is worse than either state.
+Symbolic links inside an artifact are removed as links, never followed — that is
+the one place sweep unlinks a link, and it is why the venv's `bin/python3` and
+`node_modules/.bin` go with the directory.
+
+`sweep purge` is its own command because the work is different. `clean` opens
+paths the rule already names; `purge` walks your home, so it needs its own
+preview and its own confirmation. A bare `sweep clean` lists the section as
+`belongs to another command` instead of scanning it.
 
 ### Model weights are opt-in
 
@@ -234,10 +265,11 @@ cargo build --release
 | `sweep clean` | reclaim cache, log and build space; asks once, then deletes | works |
 | `sweep clean --only model-caches` | the opt-in section: model blobs, checkpoint caches | works |
 | `sweep clean --privileged` | also sweep root-owned system caches, through `run0` or `sudo` | works |
-| `sweep purge` / `installer` | project artifacts, installer leftovers | M5 |
+| `sweep purge` | `node_modules`, `target`, virtualenvs — only where a manifest says a build made them | works |
+| `sweep installer` | installer leftovers | M5b |
 | `sweep analyze` / `status` | disk explorer, health summary | M6 |
 | `sweep uninstall` / `optimize` / `history` | package removal, maintenance, past actions | M7 |
-| `sweep aur` | AUR package cleanup | M5 |
+| `sweep aur` | AUR package cleanup | M5b |
 
 `sweep clean` is two phases. It plans — load the catalog, scan the roots,
 validate every candidate — and only then asks. The question is skipped with

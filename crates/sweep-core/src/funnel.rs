@@ -201,7 +201,12 @@ fn apply_one(item: &PlanItem, probe: &dyn FsProbe, mode: Mode) -> Outcome {
     if meta.dev != item.dev() || meta.ino != item.ino() {
         return Outcome::Skipped(Reason::RaceChanged);
     }
-    if meta.is_symlink() {
+    // A link is deletable only when the plan said this item *is* a link, and
+    // only while it still is the same link. The syscall below passes
+    // `is_dir = false` for it, so `unlinkat(..., 0)` removes the entry and never
+    // follows it: the target is untouched. An item that was a file or directory
+    // at validation time and is a link now is a swap, and a swap is a refusal.
+    if meta.is_symlink() && !item.is_symlink() {
         return Outcome::Skipped(Reason::LeafSymlink);
     }
 
@@ -373,6 +378,53 @@ mod tests {
         assert_eq!(plan.len(), 0, "a symlink must be refused at plan time");
         assert_eq!(plan.denied()[0].reason.code(), Reason::LeafSymlink.code());
         assert!(target.exists());
+        drop(temp);
+    }
+
+    #[test]
+    fn a_file_replaced_by_a_link_is_refused_and_its_target_survives() {
+        // The gap between the preview and the run is where a path can change
+        // meaning. A plan that showed a cache file must never unlink a link that
+        // points at the user's keys - whether it is refused because the inode
+        // changed or because the type changed does not matter to the user, but
+        // the target surviving does.
+        let (temp, xdg, probe) = fixture();
+        let cache = xdg.cache.clone();
+        std::fs::create_dir_all(&cache).unwrap();
+        let target = xdg.home.join("precious.txt");
+        std::fs::write(&target, b"precious").unwrap();
+        let planned = cache.join("swapped.bin");
+        std::fs::write(&planned, b"cache body").unwrap();
+
+        let plan = plan_for(&xdg, &probe, &cache, std::slice::from_ref(&planned));
+        assert_eq!(
+            plan.len(),
+            1,
+            "the file must be plannable: {:?}",
+            plan.denied()
+        );
+        assert!(!plan.items()[0].is_symlink());
+
+        // The swap: same path, now a link to something the run never saw.
+        std::fs::remove_file(&planned).unwrap();
+        std::os::unix::fs::symlink(&target, &planned).unwrap();
+
+        let report = apply(&plan, &probe, Mode::Apply, "purge", None);
+        assert_eq!(report.removed(), 0);
+        assert_eq!(report.skipped, 1);
+        let reason = match &report.results[0].outcome {
+            Outcome::Skipped(reason) => reason,
+            ref other => panic!("the swap must be a refusal, not {other:?}"),
+        };
+        assert!(
+            matches!(reason, Reason::LeafSymlink | Reason::RaceChanged),
+            "a swapped entry is a refusal, not a removal: {reason:?}"
+        );
+        assert!(target.exists(), "the link's target is untouched");
+        assert!(
+            std::fs::symlink_metadata(&planned).is_ok(),
+            "the link itself is left where the user can see it"
+        );
         drop(temp);
     }
 

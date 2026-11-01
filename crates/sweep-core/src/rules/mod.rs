@@ -116,6 +116,29 @@ impl Section {
     pub fn is_opt_in(self) -> bool {
         matches!(self, Section::ModelCaches)
     }
+
+    /// The command that owns the section, when it is not one `clean` sweeps.
+    ///
+    /// A bare `sweep clean` sweeps caches whose root the rule itself names. A
+    /// project directory is not that: it is found by walking the user's home,
+    /// and the walk needs its own preview and its own command. The owner is
+    /// named here so that the skip message and the section filter cannot
+    /// disagree about who owns it.
+    pub fn command(self) -> Option<&'static str> {
+        match self {
+            Section::ProjectArtifacts => Some("purge"),
+            _ => None,
+        }
+    }
+
+    /// True when the section belongs to a command of its own rather than to
+    /// `clean`.
+    ///
+    /// Naming it with `--only` is still allowed, because that is a user asking
+    /// for it by name.
+    pub fn is_command_scoped(self) -> bool {
+        self.command().is_some()
+    }
 }
 
 impl std::fmt::Display for Section {
@@ -159,18 +182,22 @@ pub enum Kind {
     /// Keep the newest N versions of every package in a package-manager cache
     /// and remove the rest; `keep_days` acts as a recency floor.
     PkgCache,
+    /// Remove build artifacts inside project directories, found by manifest.
+    /// `node_modules` alone is not evidence; the `package.json` beside it is.
+    ProjectArtifacts,
     /// Count and describe; never contributes a plan item.
     ReportOnly,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 7] = [
+    pub const ALL: [Kind; 8] = [
         Kind::DirSweep,
         Kind::DirAge,
         Kind::FilePattern,
         Kind::ToolCache,
         Kind::HfCache,
         Kind::PkgCache,
+        Kind::ProjectArtifacts,
         Kind::ReportOnly,
     ];
 
@@ -182,6 +209,7 @@ impl Kind {
             Kind::ToolCache => "tool-cache",
             Kind::HfCache => "hf-cache",
             Kind::PkgCache => "pkg-cache",
+            Kind::ProjectArtifacts => "project-artifacts",
             Kind::ReportOnly => "report-only",
         }
     }
@@ -196,6 +224,7 @@ impl Kind {
             "tool-cache" => Kind::ToolCache,
             "hf-cache" => Kind::HfCache,
             "pkg-cache" => Kind::PkgCache,
+            "project-artifacts" => Kind::ProjectArtifacts,
             "report-only" => Kind::ReportOnly,
             "if-missing-owner" => {
                 return Err(Some(

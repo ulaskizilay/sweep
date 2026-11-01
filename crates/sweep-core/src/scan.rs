@@ -83,6 +83,10 @@ pub struct Stats {
 pub struct Entry {
     pub path: PathBuf,
     pub is_dir: bool,
+    /// A symbolic link the walk was asked to include. Only `Spec::include_links`
+    /// sets this, and only a whole-tree sweep asks: the sink unlinks the link
+    /// itself and never what it points at.
+    pub is_symlink: bool,
     /// Bytes accounted on disk (`st_blocks * 512`), the number `du` reports.
     pub bytes: u64,
     /// Modification time, seconds since the Unix epoch.
@@ -186,6 +190,15 @@ pub struct Spec<'a> {
     pub exclude: &'a [Pattern],
     /// Roots claimed by other rules; their subtrees are never entered.
     pub skip_roots: &'a [PathBuf],
+    /// Emit symbolic links instead of blocking their parents.
+    ///
+    /// Off by default, and that default is deliberate: a link inside a cache
+    /// root is often the user's own arrangement (`~/.cache/foo -> /mnt/big/foo`)
+    /// and deleting it frees nothing while breaking the setup. A build artifact
+    /// is the other case: `node_modules/.bin` and a virtualenv's `bin/python3`
+    /// are links the package manager writes, and a sweep that leaves them
+    /// behind leaves a tree that looks installed but is not.
+    pub include_links: bool,
     pub limits: &'a Limits,
 }
 
@@ -196,6 +209,7 @@ impl<'a> Spec<'a> {
             select: Select::Everything,
             exclude: &[],
             skip_roots: &[],
+            include_links: false,
             limits,
         }
     }
@@ -342,10 +356,24 @@ fn walk(
             }
         };
         if meta.is_symlink() {
-            // Never followed, never deleted: the link's target is outside the
-            // rule's evidence. It also blocks its parent from being emptied.
+            // Never followed. Whether the link itself is emitted depends on the
+            // caller: a cache keeps its links, a build artifact does not.
             out.stats.symlinks += 1;
-            block(out, base, &child, BlockKind::Symlink);
+            if !spec.include_links || !matches!(spec.select, Select::Everything) {
+                // A blocked link also blocks its parent from being emptied.
+                block(out, base, &child, BlockKind::Symlink);
+                continue;
+            }
+            out.entries.push(Entry {
+                path: child,
+                is_dir: false,
+                is_symlink: true,
+                bytes: meta.accounted_bytes(),
+                mtime: meta.mtime,
+            });
+            out.stats.emitted += 1;
+            out.bytes = out.bytes.saturating_add(meta.accounted_bytes());
+            out.newest = out.newest.max(meta.mtime);
             continue;
         }
 
@@ -395,6 +423,7 @@ fn walk(
                     out.entries.push(Entry {
                         path: child,
                         is_dir: true,
+                        is_symlink: false,
                         bytes: meta.accounted_bytes(),
                         mtime: meta.mtime,
                     });
@@ -424,6 +453,7 @@ fn walk(
         out.entries.push(Entry {
             path: child,
             is_dir: false,
+            is_symlink: false,
             bytes: meta.accounted_bytes(),
             mtime: meta.mtime,
         });
@@ -531,6 +561,58 @@ mod tests {
             .iter()
             .all(|entry| entry.path.file_name() != Some("keep.txt".as_ref())));
         assert!(std::fs::symlink_metadata(root.join("link")).is_ok());
+    }
+
+    #[test]
+    fn a_link_is_emitted_only_when_the_caller_asks_for_links() {
+        // Two callers, two answers. A cache keeps the user's own arrangement
+        // untouched; a build artifact has to take the links the package manager
+        // wrote, or the tree still looks installed.
+        let (temp, probe) = fixture();
+        let root = temp.path().join("node_modules");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep.txt"), "keep").unwrap();
+        touch(&root, ".bin/tool", "#!/bin/sh\n");
+        std::os::unix::fs::symlink(&outside, root.join(".bin/link")).unwrap();
+
+        let specs = limits();
+        let strict = Spec::new(8, &specs);
+        let kept = collect(&root, &root, 0, &strict, &probe);
+        assert!(
+            kept.entries
+                .iter()
+                .all(|entry| entry.path.file_name() != Some("link".as_ref())),
+            "a link is not emitted by default"
+        );
+        assert_eq!(
+            kept.blocked_within(Path::new(".bin"))
+                .map(|block| block.kind),
+            Some(BlockKind::Symlink),
+            "and its parent cannot be reported empty"
+        );
+
+        let mut loose = Spec::new(8, &specs);
+        loose.include_links = true;
+        let taken = collect(&root, &root, 0, &loose, &probe);
+        let link = taken
+            .entries
+            .iter()
+            .find(|entry| entry.path.file_name() == Some("link".as_ref()))
+            .expect("the link itself is emitted");
+        assert!(link.is_symlink, "and it is recorded as a link");
+        assert!(
+            taken
+                .entries
+                .iter()
+                .all(|entry| entry.path.file_name() != Some("keep.txt".as_ref())),
+            "emitting a link must never follow it"
+        );
+        assert!(
+            taken.blocked.is_empty(),
+            "a walk that takes its links has nothing blocked: {:?}",
+            taken.blocked
+        );
     }
 
     #[test]

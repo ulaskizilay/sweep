@@ -1286,6 +1286,206 @@ fn only_restricts_the_run_to_the_named_sections() {
     );
 }
 
+// ---------------------------------------------------------------- purge ---
+
+/// A home with three projects, one artifact-shaped directory with no manifest,
+/// and a link inside an artifact.
+fn project_home() -> tempfile::TempDir {
+    let home = home();
+    write(home.path(), "web/package.json", "{}");
+    write(home.path(), "web/src/index.js", "console.log(1);");
+    write(
+        home.path(),
+        "web/node_modules/left-pad/index.js",
+        "module.exports = 1;",
+    );
+    write(
+        home.path(),
+        "rustproj/Cargo.toml",
+        "[package]\nname = \"x\"\n",
+    );
+    write(home.path(), "rustproj/src/main.rs", "fn main() {}");
+    write(home.path(), "rustproj/target/debug/app", "binary");
+    write(home.path(), "pyproj/pyproject.toml", "[project]\n");
+    write(home.path(), "pyproj/pkg/mod.py", "x = 1");
+    write(home.path(), "pyproj/.venv/bin/activate", "# venv");
+    // No manifest: artifact-shaped, but nothing says a build produced it.
+    write(home.path(), "stray/node_modules/x/index.js", "x");
+    write(home.path(), "notes/todo.md", "keep me");
+
+    std::fs::create_dir_all(home.path().join("web/node_modules/.bin")).expect("mkdir");
+    std::os::unix::fs::symlink(
+        "../left-pad/index.js",
+        home.path().join("web/node_modules/.bin/left-pad"),
+    )
+    .expect("link inside the artifact");
+    std::os::unix::fs::symlink(
+        "/usr/bin/python3",
+        home.path().join("pyproj/.venv/bin/python3"),
+    )
+    .expect("venv interpreter link");
+
+    // A month of not building is the whole premise of `keep_days = 30`.
+    for relative in [
+        "web",
+        "web/package.json",
+        "web/src",
+        "web/node_modules",
+        "web/node_modules/left-pad",
+        "rustproj",
+        "rustproj/Cargo.toml",
+        "rustproj/target",
+        "pyproj",
+        "pyproj/pyproject.toml",
+        "pyproj/.venv",
+        "stray",
+        "stray/node_modules",
+        "notes",
+    ] {
+        let path = home.path().join(relative);
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(60 * 86_400);
+        // `-h` semantics: the link's own mtime, not its target's.
+        let meta = std::fs::symlink_metadata(&path).expect("metadata");
+        let _ = meta;
+        std::fs::File::options()
+            .read(true)
+            .open(&path)
+            .expect("open")
+            .set_times(std::fs::FileTimes::new().set_modified(when))
+            .expect("set mtime");
+    }
+    home
+}
+
+#[test]
+fn purge_requires_the_manifests_it_removes_around() {
+    let home = project_home();
+    let before = snapshot(home.path());
+
+    let dry = run_in(home.path(), &["purge", "--dry-run"]);
+    assert_eq!(dry.code, Some(0), "stderr: {}", dry.stderr);
+    assert!(
+        dry.stdout
+            .contains("sweep purge — dry run, nothing is deleted"),
+        "the header must name the command: \n{}",
+        dry.stdout
+    );
+    assert!(
+        dry.stdout.contains("would be removed permanently"),
+        "the fixture must plan something:\n{}",
+        dry.stdout
+    );
+    assert_eq!(
+        before,
+        snapshot(home.path()),
+        "a dry run must not create, remove or move anything below HOME"
+    );
+
+    let applied = run_in(home.path(), &["purge", "--yes"]);
+    assert_eq!(applied.code, Some(0), "stderr: {}", applied.stderr);
+    assert!(
+        applied.stdout.contains("Removed"),
+        "the report must say what happened:\n{}",
+        applied.stdout
+    );
+
+    for gone in ["web/node_modules", "rustproj/target", "pyproj/.venv"] {
+        assert!(
+            !home.path().join(gone).exists(),
+            "the build directory must be gone: {gone}"
+        );
+    }
+    for kept in [
+        "web/package.json",
+        "web/src/index.js",
+        "rustproj/Cargo.toml",
+        "rustproj/src/main.rs",
+        "pyproj/pyproject.toml",
+        "pyproj/pkg/mod.py",
+        "stray/node_modules/x/index.js",
+        "notes/todo.md",
+    ] {
+        assert!(
+            home.path().join(kept).exists(),
+            "a purge removes artifacts, never the project: {kept}"
+        );
+    }
+    assert!(
+        std::fs::symlink_metadata(home.path().join("web/node_modules/.bin/left-pad")).is_err(),
+        "a link inside a removed artifact goes with it"
+    );
+    assert!(
+        std::path::Path::new("/usr/bin/python3").exists(),
+        "unlinking the venv interpreter never touches its target"
+    );
+
+    let rows = log_rows(home.path());
+    assert!(!rows.is_empty(), "an applied purge must be logged");
+    for row in &rows {
+        assert_eq!(row["cmd"], "purge", "the log must name the command: {row}");
+        assert!(
+            row["session"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("purge-"),
+            "the session separates purge rows from clean rows: {row}"
+        );
+    }
+}
+
+#[test]
+fn purge_without_yes_on_a_pipe_declines_and_writes_nothing() {
+    let home = project_home();
+    let before = snapshot(home.path());
+
+    let output = run_in(home.path(), &["purge"]);
+    assert_eq!(output.code, Some(5), "stderr: {}", output.stderr);
+    assert!(
+        output.stderr.contains("--yes"),
+        "the refusal must name the flag that turns the question off: {:?}",
+        output.stderr
+    );
+    assert_eq!(
+        before,
+        snapshot(home.path()),
+        "a declined purge writes nothing"
+    );
+    assert!(home.path().join("web/node_modules").exists());
+}
+
+#[test]
+fn a_bare_clean_names_purge_instead_of_walking_projects() {
+    let home = project_home();
+
+    let output = run_in(home.path(), &["clean", "--dry-run", "--json"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("one document");
+
+    let rule = report["rules"]
+        .as_array()
+        .expect("rules")
+        .iter()
+        .find(|run| run["id"] == "project.artifacts.sources")
+        .expect("the rule is listed even when another command owns it");
+    assert_eq!(
+        rule["status"], "command_scoped",
+        "a bare clean must say whose section this is: {rule}"
+    );
+    assert!(
+        rule["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("sweep purge"),
+        "the skip must name the command to run: {rule}"
+    );
+    assert!(
+        home.path()
+            .join("web/node_modules/left-pad/index.js")
+            .exists(),
+        "a bare clean must not walk project directories"
+    );
+}
+
 #[test]
 fn an_unknown_section_is_a_usage_error() {
     let home = home();

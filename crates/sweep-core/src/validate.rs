@@ -92,6 +92,18 @@ pub struct Policy {
     pub require_same_device: bool,
     pub require_open_scan: bool,
     pub allow_snapshot_paths: bool,
+    /// Whether a target that is itself a symbolic link may be unlinked.
+    ///
+    /// Off for `clean`: a link inside a cache root is usually the user's own
+    /// arrangement, and removing it frees nothing. On for a whole-tree sweep of
+    /// a build artifact, where the package manager wrote the links and the tree
+    /// is not rebuildable while they remain.
+    ///
+    /// Even when allowed, only the link is removed. The sink unlinks with
+    /// `unlinkat(..., 0)`, which never follows, and the plan records that the
+    /// item *was* a link so a file swapped for one between plan and apply is
+    /// still refused.
+    pub allow_leaf_symlink: bool,
 }
 
 impl Default for Policy {
@@ -100,6 +112,7 @@ impl Default for Policy {
             require_same_device: true,
             require_open_scan: true,
             allow_snapshot_paths: false,
+            allow_leaf_symlink: false,
         }
     }
 }
@@ -312,7 +325,7 @@ pub fn validate(path: &Path, ctx: &ValidateCtx<'_>) -> Verdict {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return deny(Reason::NotFound),
         Err(error) => return deny(Reason::ProbeUnknown(error.to_string())),
     };
-    if meta.is_symlink() {
+    if meta.is_symlink() && !ctx.policy.allow_leaf_symlink {
         return deny(Reason::LeafSymlink);
     }
 
@@ -366,7 +379,7 @@ pub fn validate(path: &Path, ctx: &ValidateCtx<'_>) -> Verdict {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return deny(Reason::NotFound),
         Err(error) => return deny(Reason::ProbeUnknown(error.to_string())),
     };
-    if physical_meta.is_symlink() {
+    if physical_meta.is_symlink() && !ctx.policy.allow_leaf_symlink {
         // A race already, or a link inside a resolved directory.
         return deny(Reason::LeafSymlink);
     }
@@ -400,10 +413,16 @@ pub fn validate(path: &Path, ctx: &ValidateCtx<'_>) -> Verdict {
     }
 
     // ---- 9. Immutable flag. ----
-    match ctx.probe.is_immutable(&physical) {
-        Ok(true) => return deny(Reason::Immutable),
-        Ok(false) => {}
-        Err(error) => return deny(Reason::ProbeUnknown(error.to_string())),
+    //
+    // A symbolic link has no inode flags of its own to read: the probe opens
+    // with `O_NOFOLLOW` and a link refuses it, and the target's flags are not
+    // this deletion's business because the sink never touches the target.
+    if !physical_meta.is_symlink() {
+        match ctx.probe.is_immutable(&physical) {
+            Ok(true) => return deny(Reason::Immutable),
+            Ok(false) => {}
+            Err(error) => return deny(Reason::ProbeUnknown(error.to_string())),
+        }
     }
 
     // ---- 10. Live handles. ----
