@@ -20,8 +20,9 @@
 ## Status
 
 > **Pre-alpha.** `doctor`, `rules`, `clean`, `purge`, `installer`, `aur`,
-> `status`, `analyze`, `history` and `optimize` work. `clean` prints the plan, asks once, then deletes
-> through the single funnel and writes one operation-log row per decision;
+> `status`, `analyze`, `history`, `optimize` and `uninstall` work. `clean` prints
+> the plan, asks once, then deletes through the single funnel and writes one
+> operation-log row per decision;
 > `--dry-run` stops before the question and writes nothing at all. The catalog is
 > 108 rules over sixteen sections, and the section whose loss may not be
 > recoverable — downloaded model weights — is skipped unless you name it. System
@@ -43,7 +44,7 @@
 | M6a | `status`: a read-only health summary, text and JSON | done |
 | M6b | `analyze`: the disk explorer and the large-file report | done |
 | M7a | `history` and `optimize`: what sweep did, and the user-side indexes | done |
-| M7b | `uninstall`: package removal, the leftover scan | next |
+| M7b | `uninstall`: pacman's transaction, the leftover scan | done |
 | M8 | packaging, man page, completions | planned |
 
 ## Why
@@ -309,7 +310,7 @@ cargo build --release
 | `sweep analyze` | the disk explorer, and `--largest` for a pipe; the only deletion is a move to the trash | works |
 | `sweep history` | every run from the operation log, grouped by session; `--json` for scripts | works |
 | `sweep optimize` | rebuild the user-side indexes through the tools that own them; system-wide tasks are named, never run as root | works |
-| `sweep uninstall` | package removal and the leftover scan | M7b |
+| `sweep uninstall` | an inventory, or pacman's own removal transaction; leftovers go to the trash | works |
 | `sweep aur` | built `.pkg.tar.*` archives in helper caches; clones and sources are reported, never taken | works |
 
 `sweep clean` is two phases. It plans — load the catalog, scan the roots,
@@ -345,9 +346,10 @@ it could not be measured; the default keeps the screen quiet.
 The actionable rows name the command that acts on them (`sweep clean --only
 system` for a package cache, `sudo pacman -Rns $(pacman -Qtdq)` for orphans),
 because a health summary that cannot be acted on is a dashboard. Trash appears
-with its size and no command: paired `files/` + `info/` removal is not
-implemented yet, so naming a sweep command there would be a promise the tool does
-not keep.
+with its size and no command: `analyze` and `uninstall` put things there and
+sweep does not empty it, so a command in that row would be a promise the tool
+does not keep. The way out is the one you already have -- the desktop's
+"Restore", or emptying the trash in a file manager.
 
 `--json` prints the same facts with stable field names, one document, for a
 script that should not parse the prose. The last-run row sums the newest session
@@ -426,6 +428,49 @@ skipped with the reason, and a plan with nothing runnable is not a question wort
 asking. `--dry-run` prints the plan and the exact command lines and writes
 nothing; a run appends one `REBUILT` row per task, which is what `sweep history`
 shows afterwards.
+
+### Uninstall asks pacman, it does not delete
+
+`sweep uninstall` has no deletion path of its own. It never removes a `/usr`
+file, never edits the package database and never decides what a package depends
+on. pacman owns the transaction; sweep asks what it would be and shows it:
+
+```console
+$ sweep uninstall btop --dry-run
+sweep uninstall — plan
+
+  btop  1.4.7-1.1
+
+  1 package, 1.8 MiB, 63 files
+  command: /usr/bin/run0 -- pacman -Rs --noconfirm btop
+
+  1 leftover (exact name match, a real run moves it to the trash):
+    ~/.config/btop  12.0 KiB
+  dry run: nothing was removed and nothing was moved.
+```
+
+The preflight is `pacman -Rs --print --print-format '%n %v'`, so the transaction
+in the plan is the transaction pacman will run, dependencies and blockers
+included. The size comes from `st_blocks` over the paths `pacman -Qlq` says the
+packages own, and the file count is printed beside it so a number that looks
+wrong can be checked. With no package name, the command is a read-only
+inventory of what is installed explicitly and what is an orphan.
+
+Three rules make the root half narrow. Only names that appear in `pacman -Qe`
+are accepted, so a typo, a glob or an option cannot become an argument. A short
+list of packages the machine needs to boot -- `base`, `pacman`, `glibc`,
+`systemd`, the kernels -- is refused with the reason. And the elevated argv is
+`run0 -- pacman -Rs --noconfirm <name>`: pacman is named **unqualified** on
+purpose, so `run0` and `sudo` resolve it in their own root-controlled `PATH`
+rather than in the user's.
+
+What pacman leaves behind is a separate question. `~/.config/<name>`,
+`~/.local/share/<name>`, `~/.cache/<name>` and `~/.local/state/<name>` are
+matched by **exact name only** -- no prefix, no suffix, no case folding -- shown
+in the plan, and moved to the trash after the removal succeeds, because a
+half-run transaction means the package is still installed and its configuration
+is still in use. They are recoverable from the desktop's "Restore", and every
+move is one `TRASHED` row in the operation log.
 
 ## Development
 

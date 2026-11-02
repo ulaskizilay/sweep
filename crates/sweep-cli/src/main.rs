@@ -14,6 +14,8 @@ mod optimize;
 mod pipeline;
 mod rules;
 mod status;
+mod trash;
+mod uninstall;
 
 use std::process::ExitCode;
 
@@ -107,6 +109,26 @@ enum Command {
         dry_run: bool,
 
         /// Apply the plan without asking. Required when stdin is not a terminal.
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// Remove packages, and show what pacman would remove first.
+    ///
+    /// With no name, this lists what is installed explicitly and what is an
+    /// orphan. With names, it asks pacman what the transaction would be, prints
+    /// it with a size, and only then runs `pacman -Rs` as root. Sweep never
+    /// deletes a `/usr` path itself.
+    Uninstall {
+        /// Packages to remove. Nothing is removed without at least one.
+        #[arg(value_name = "PACKAGE")]
+        packages: Vec<String>,
+
+        /// Show the transaction and stop: no removal, no operation-log entry.
+        #[arg(long, conflicts_with = "yes")]
+        dry_run: bool,
+
+        /// Remove without asking. Required when stdin is not a terminal.
         #[arg(long)]
         yes: bool,
     },
@@ -211,6 +233,10 @@ pub(crate) const EXIT_DECLINED: u8 = 5;
 pub(crate) const EXIT_UNSUPPORTED_ENVIRONMENT: u8 = 78;
 
 fn main() -> ExitCode {
+    // Before anything can print: a pipeline that closed its reader should end
+    // this process the way it ends `ls` and `grep`, not with a panic message.
+    sweep_core::sys::die_on_broken_pipe();
+
     let cli = Cli::parse();
     init_tracing(cli.verbose);
 
@@ -253,6 +279,11 @@ fn main() -> ExitCode {
             privileged,
         ),
         Command::Status => status::run(cli.json, cli.verbose),
+        Command::Uninstall {
+            packages,
+            dry_run,
+            yes,
+        } => uninstall::run(packages, cli.json, cli.verbose, dry_run, yes),
         Command::History { limit } => history::run(limit as usize, cli.json, cli.verbose),
         Command::Optimize { dry_run, yes } => optimize::run(cli.json, cli.verbose, dry_run, yes),
         Command::Analyze { path, largest } => {

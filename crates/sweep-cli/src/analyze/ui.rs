@@ -19,9 +19,9 @@ use sweep_core::oplog::{rfc3339, Action as LogAction, Oplog, Record};
 use sweep_core::paths::Xdg;
 
 use super::app::{Action, App, Mode};
-use super::trash::Trash;
 use super::view::{self, Row};
 use crate::format::{human_bytes, human_count};
+use crate::trash::Trash;
 use crate::EXIT_UNSUPPORTED_ENVIRONMENT;
 
 pub fn run(root: &Path, xdg: &Xdg, verbose: u8) -> ExitCode {
@@ -131,7 +131,7 @@ fn event_loop(
     }
 }
 
-fn record<'a>(session: &'a str, row: &Row, moved: &super::trash::Moved) -> Record<'a> {
+fn record<'a>(session: &'a str, row: &Row, moved: &crate::trash::Moved) -> Record<'a> {
     Record {
         ts: rfc3339(now_unix()),
         cmd: "analyze",

@@ -33,6 +33,18 @@ pub(crate) fn human_count(count: u64) -> String {
     out
 }
 
+/// `1 file`, `2 files`, `10,000 files`.
+///
+/// The singular case is the whole reason this exists: "removed 1 packages"
+/// reads as a bug in the program, not as a small run.
+pub(crate) fn plural(count: usize, noun: &str) -> String {
+    if count == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{} {noun}s", human_count(count as u64))
+    }
+}
+
 /// `1.4 TiB` for a percent: one decimal, never more.
 pub(crate) fn percent(part: u64, total: u64) -> f64 {
     if total == 0 {

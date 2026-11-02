@@ -27,9 +27,11 @@
 
 pub mod fs_facts;
 pub mod funnel;
+pub mod leftovers;
 pub mod meta;
 pub mod model_cache;
 pub mod oplog;
+pub mod packages;
 pub mod paths;
 pub mod pkg_cache;
 pub mod plan;

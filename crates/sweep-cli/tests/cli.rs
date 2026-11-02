@@ -2218,3 +2218,516 @@ fn yes_with_dry_run_is_a_usage_error_for_optimize_too() {
     let output = run_in(home.path(), &["optimize", "--yes", "--dry-run"]);
     assert_eq!(output.code, Some(2), "stderr: {}", output.stderr);
 }
+
+// ----------------------------------------------------------- uninstall (M7b) ---
+
+/// A home with stub `pacman` and `run0` on `PATH`, plus a fixture directory the
+/// stubs read.
+///
+/// Nothing here can reach the real package database or ask for a real password:
+/// `PATH` holds only the stub directory, and the only privileged program the
+/// command can find is the stub, which records its argv instead of running it.
+struct Pacman {
+    home: tempfile::TempDir,
+    bin: PathBuf,
+    fixture: PathBuf,
+}
+
+/// `cat` is not available: `PATH` holds only the stub directory, so the body
+/// uses shell builtins only. That confinement is the point of the fixture.
+const PACMAN_STUB: &str = r#"#!/bin/sh
+dump() { while IFS= read -r line; do printf '%s\n' "$line"; done < "$1"; }
+case "$1" in
+  -Qe) [ -f "$FIXTURE/explicit" ] && dump "$FIXTURE/explicit"; exit 0 ;;
+  -Qtd) [ -f "$FIXTURE/orphans" ] && dump "$FIXTURE/orphans"; exit 0 ;;
+  -Qlq) [ -f "$FIXTURE/files/$2" ] && dump "$FIXTURE/files/$2"; exit 0 ;;
+  -Rs) if [ -f "$FIXTURE/transaction" ]; then dump "$FIXTURE/transaction"; exit 0; fi
+       printf 'error: target not found\n' >&2; exit 1 ;;
+  *) printf 'stub pacman: unexpected %s\n' "$*" >&2; exit 9 ;;
+esac
+"#;
+
+/// Records the argv it was handed, then exits 0 so a removal can be observed
+/// without one happening.
+const RUN0_STUB: &str = r#"#!/bin/sh
+shift
+printf '%s\n' "$@" >> "$MARKER"
+printf 'removing packages\n'
+exit 0
+"#;
+
+fn script(bin: &Path, name: &str, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let path = bin.join(name);
+    // Written beside the target and renamed: writing a script that is already
+    // being exec'd is ETXTBSY on a re-run.
+    let temporary = bin.join(format!(".{name}.tmp"));
+    std::fs::write(&temporary, body).expect("write stub");
+    std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    std::fs::rename(&temporary, &path).expect("rename stub");
+}
+
+impl Pacman {
+    /// Two explicit packages, one of them protected, and one orphan.
+    fn new() -> Self {
+        let home = home();
+        let bin = home.path().join("stubbin");
+        let fixture = home.path().join("fixture");
+        std::fs::create_dir_all(&bin).expect("mkdir bin");
+        std::fs::create_dir_all(fixture.join("files")).expect("mkdir fixture");
+        script(&bin, "pacman", PACMAN_STUB);
+        script(&bin, "run0", RUN0_STUB);
+
+        std::fs::write(
+            fixture.join("explicit"),
+            "firefox 159.0-1\nark 26.08.2-1\nbase 3-3\n",
+        )
+        .expect("explicit");
+        std::fs::write(fixture.join("orphans"), "geckodriver 0.36.0-1\n").expect("orphans");
+
+        // The transaction: the named package plus one dependency, with real
+        // files behind them so the size and the count are not invented.
+        std::fs::write(
+            fixture.join("transaction"),
+            "firefox 159.0-1\ngeckodriver 0.36.0-1\n",
+        )
+        .expect("transaction");
+        let mut files = String::new();
+        for (name, bytes) in [("firefox", 8 * 1024), ("geckodriver", 4 * 1024)] {
+            write(
+                home.path(),
+                &format!("installed/{name}"),
+                &"x".repeat(bytes),
+            );
+            files.push_str(&format!(
+                "{}\n",
+                home.path().join("installed").join(name).display()
+            ));
+        }
+        // `-Qlq` is asked per package, so each package needs its own list.
+        std::fs::write(
+            fixture.join("files/firefox"),
+            format!("{}\n", home.path().join("installed/firefox").display()),
+        )
+        .expect("files");
+        std::fs::write(
+            fixture.join("files/geckodriver"),
+            format!("{}\n", home.path().join("installed/geckodriver").display()),
+        )
+        .expect("files");
+        let _ = files;
+
+        Self { home, bin, fixture }
+    }
+
+    fn run(&self, args: &[&str]) -> Output {
+        collect(
+            sweep_in(self.home.path())
+                .env("PATH", &self.bin)
+                .env("FIXTURE", &self.fixture)
+                .env("MARKER", self.home.path().join("marker"))
+                .args(args)
+                .output()
+                .expect("spawn sweep"),
+        )
+    }
+
+    /// What the privilege stub was asked to run, one argument per line.
+    fn elevator_calls(&self) -> Vec<String> {
+        std::fs::read_to_string(self.home.path().join("marker"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+#[test]
+fn uninstall_with_no_name_is_an_inventory_and_removes_nothing() {
+    let stub = Pacman::new();
+    let before = snapshot(stub.home.path());
+
+    let output = stub.run(&["uninstall"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    assert!(
+        output.stdout.contains("firefox"),
+        "an explicit package is listed:\n{}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("geckodriver"),
+        "an orphan is listed too:\n{}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("--dry-run"),
+        "an inventory says how to look at a removal:\n{}",
+        output.stdout
+    );
+    assert!(stub.elevator_calls().is_empty(), "nothing was elevated");
+    assert_eq!(snapshot(stub.home.path()), before);
+}
+
+#[test]
+fn uninstall_inventory_json_is_one_document_with_both_lists() {
+    let stub = Pacman::new();
+    let output = stub.run(&["uninstall", "--json"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("one document");
+    let explicit = report["explicit"].as_array().expect("explicit");
+    assert_eq!(explicit.len(), 3);
+    assert_eq!(explicit[0]["name"], "firefox");
+    assert_eq!(explicit[0]["version"], "159.0-1");
+    let orphans = report["orphans"].as_array().expect("orphans");
+    assert_eq!(orphans.len(), 1);
+    assert_eq!(orphans[0]["name"], "geckodriver");
+}
+
+#[test]
+fn uninstall_dry_run_shows_the_transaction_pacman_would_run() {
+    let stub = Pacman::new();
+    let before = snapshot(stub.home.path());
+
+    let output = stub.run(&["uninstall", "firefox", "--dry-run"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    assert!(
+        output.stdout.contains("firefox"),
+        "the named package is in the plan:\n{}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("geckodriver") && output.stdout.contains("(a dependency)"),
+        "a dependency pacman added is marked as one:\n{}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("2 packages"),
+        "the count is the transaction, not the request:\n{}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("pacman -Rs --noconfirm firefox"),
+        "the exact argv is printed:\n{}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("dry run: nothing was removed"),
+        "a dry run must say so:\n{}",
+        output.stdout
+    );
+    assert!(
+        stub.elevator_calls().is_empty(),
+        "a dry run never elevates: {:?}",
+        stub.elevator_calls()
+    );
+    assert_eq!(
+        snapshot(stub.home.path()),
+        before,
+        "a dry run changes nothing"
+    );
+}
+
+#[test]
+fn uninstall_without_yes_on_a_pipe_declines_and_runs_nothing() {
+    let stub = Pacman::new();
+    let before = snapshot(stub.home.path());
+
+    let output = stub.run(&["uninstall", "firefox"]);
+    assert_eq!(output.code, Some(5), "stderr: {}", output.stderr);
+    assert!(
+        output.stderr.contains("--yes"),
+        "the refusal names the way forward: {:?}",
+        output.stderr
+    );
+    assert!(
+        output.stderr.contains("nothing was changed"),
+        "the refusal says what did not happen: {:?}",
+        output.stderr
+    );
+    assert!(
+        stub.elevator_calls().is_empty(),
+        "no question means no removal: {:?}",
+        stub.elevator_calls()
+    );
+    assert_eq!(snapshot(stub.home.path()), before);
+    assert!(
+        !stub
+            .home
+            .path()
+            .join(".local/state/sweep/operations.jsonl")
+            .exists(),
+        "a declined run logs nothing"
+    );
+}
+
+#[test]
+fn uninstall_yes_removes_through_the_elevator_and_logs_every_package() {
+    let stub = Pacman::new();
+    let output = stub.run(&["uninstall", "firefox", "--yes"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+
+    let calls = stub.elevator_calls();
+    assert_eq!(
+        calls,
+        ["pacman", "-Rs", "--noconfirm", "firefox"],
+        "the elevated argv carries no path, no shell and no option of its own"
+    );
+
+    let rows = log_rows(stub.home.path());
+    assert_eq!(
+        rows.len(),
+        2,
+        "one row per package in the transaction: {rows:?}"
+    );
+    assert!(
+        rows.iter().all(|row| row["action"] == "REMOVED"),
+        "{rows:?}"
+    );
+    assert!(rows.iter().all(|row| row["cmd"] == "uninstall"), "{rows:?}");
+    assert!(
+        rows.iter().any(|row| row["path"] == "geckodriver"),
+        "a dependency that went is recorded too: {rows:?}"
+    );
+
+    let history = run_in(stub.home.path(), &["history", "--json"]);
+    let report: serde_json::Value = serde_json::from_str(&history.stdout).expect("json");
+    assert_eq!(report["sessions"][0]["command"], "uninstall");
+    assert_eq!(report["sessions"][0]["counts"]["removed"], 2);
+}
+
+#[test]
+fn uninstall_refuses_a_package_the_system_needs() {
+    let stub = Pacman::new();
+    let before = snapshot(stub.home.path());
+
+    let output = stub.run(&["uninstall", "base", "--yes"]);
+    assert_eq!(output.code, Some(5), "stderr: {}", output.stderr);
+    assert!(
+        output.stderr.contains("base") && output.stderr.contains("defines the system"),
+        "the refusal names the package and why: {:?}",
+        output.stderr
+    );
+    assert!(
+        stub.elevator_calls().is_empty(),
+        "a protected package never reaches pacman"
+    );
+    assert_eq!(snapshot(stub.home.path()), before);
+}
+
+#[test]
+fn uninstall_refuses_a_name_that_is_not_installed_explicitly() {
+    let stub = Pacman::new();
+    let output = stub.run(&["uninstall", "nosuchpkg", "--yes"]);
+    assert_eq!(output.code, Some(5), "stderr: {}", output.stderr);
+    assert!(
+        output
+            .stderr
+            .contains("not one of the explicitly installed"),
+        "{:?}",
+        output.stderr
+    );
+    assert!(stub.elevator_calls().is_empty());
+}
+
+#[test]
+fn a_package_name_that_looks_like_an_option_is_a_usage_error() {
+    let stub = Pacman::new();
+    // Clap refuses it before sweep sees it, which is the cheapest place to
+    // stop an option from being handed to a root program.
+    let output = stub.run(&["uninstall", "-Syu", "--yes"]);
+    assert_eq!(output.code, Some(2), "stderr: {}", output.stderr);
+    assert!(stub.elevator_calls().is_empty());
+}
+
+#[test]
+fn uninstall_reports_when_pacman_refuses_the_transaction() {
+    let stub = Pacman::new();
+    std::fs::remove_file(stub.fixture.join("transaction")).expect("unset transaction");
+
+    let output = stub.run(&["uninstall", "firefox", "--dry-run"]);
+    assert_eq!(output.code, Some(1), "stderr: {}", output.stderr);
+    assert!(
+        output.stderr.contains("pacman refused the transaction"),
+        "{:?}",
+        output.stderr
+    );
+    assert!(
+        output.stderr.contains("target not found"),
+        "pacman's own words are the reason: {:?}",
+        output.stderr
+    );
+    assert!(stub.elevator_calls().is_empty());
+}
+
+#[test]
+fn a_failed_removal_is_exit_one_and_logged_as_failed() {
+    let stub = Pacman::new();
+    // An elevator that refuses: the transaction was planned but did not happen.
+    script(
+        &stub.bin,
+        "run0",
+        "#!/bin/sh\nshift\nprintf '%s\\n' \"$@\" >> \"$MARKER\"\nexit 1\n",
+    );
+
+    let output = stub.run(&["uninstall", "firefox", "--yes"]);
+    assert_eq!(output.code, Some(1), "stderr: {}", output.stderr);
+    let rows = log_rows(stub.home.path());
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert!(rows.iter().all(|row| row["action"] == "FAILED"), "{rows:?}");
+    assert!(
+        rows.iter().all(|row| row["reason"] == "pacman_failed"),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn yes_with_dry_run_is_a_usage_error_for_uninstall_too() {
+    let stub = Pacman::new();
+    let output = stub.run(&["uninstall", "firefox", "--yes", "--dry-run"]);
+    assert_eq!(output.code, Some(2), "stderr: {}", output.stderr);
+}
+
+#[test]
+fn uninstall_dry_run_names_the_leftovers_a_real_run_would_move() {
+    let stub = Pacman::new();
+    write(stub.home.path(), ".config/firefox/profiles.ini", "keep me");
+    let before = snapshot(stub.home.path());
+
+    let output = stub.run(&["uninstall", "firefox", "--dry-run"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    assert!(
+        output.stdout.contains("~/.config/firefox"),
+        "the leftover is part of the plan:\n{}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("a real run moves it to the trash"),
+        "a dry run says the move would happen:\n{}",
+        output.stdout
+    );
+    assert_eq!(
+        snapshot(stub.home.path()),
+        before,
+        "a dry run moves nothing"
+    );
+    assert!(!stub.home.path().join(".local/share/Trash").exists());
+}
+
+#[test]
+fn uninstall_yes_moves_the_leftovers_to_the_trash_and_leaves_a_record() {
+    let stub = Pacman::new();
+    write(stub.home.path(), ".config/firefox/profiles.ini", "keep me");
+    write(stub.home.path(), ".cache/firefox/blob", "cache body");
+    // A directory that merely starts with the name is somebody else's.
+    write(stub.home.path(), ".config/firefox-dev/settings", "not mine");
+
+    let output = stub.run(&["uninstall", "firefox", "--yes"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    assert!(
+        output.stdout.contains("moved 2 leftover paths"),
+        "both exact-name paths moved:\n{}",
+        output.stdout
+    );
+
+    let trash = stub.home.path().join(".local/share/Trash");
+    assert!(!stub.home.path().join(".config/firefox").exists());
+    assert!(!stub.home.path().join(".cache/firefox").exists());
+    assert!(
+        stub.home
+            .path()
+            .join(".config/firefox-dev/settings")
+            .exists(),
+        "a name that only starts with the package name is not evidence"
+    );
+    let files: Vec<String> = std::fs::read_dir(trash.join("files"))
+        .expect("files")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert_eq!(files.len(), 2, "{files:?}");
+    assert!(files.iter().any(|name| name == "firefox"), "{files:?}");
+
+    let info = std::fs::read_to_string(trash.join("info/firefox.trashinfo")).expect("record");
+    assert!(info.contains("[Trash Info]"), "{info}");
+    assert!(info.contains(".config/firefox"), "{info}");
+    assert!(info.contains("DeletionDate="), "{info}");
+
+    let rows = log_rows(stub.home.path());
+    let trashed: Vec<&serde_json::Value> = rows
+        .iter()
+        .filter(|row| row["action"] == "TRASHED")
+        .collect();
+    assert_eq!(trashed.len(), 2, "{rows:?}");
+    assert!(
+        trashed
+            .iter()
+            .all(|row| row["rule"] == "uninstall.leftover"),
+        "{rows:?}"
+    );
+    assert!(
+        trashed.iter().any(|row| row["path"]
+            == stub
+                .home
+                .path()
+                .join(".config/firefox")
+                .display()
+                .to_string()),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn a_failed_removal_leaves_the_leftovers_where_they_are() {
+    let stub = Pacman::new();
+    write(stub.home.path(), ".config/firefox/profiles.ini", "keep me");
+    script(
+        &stub.bin,
+        "run0",
+        "#!/bin/sh\nshift\nprintf '%s\\n' \"$@\" >> \"$MARKER\"\nexit 1\n",
+    );
+
+    let output = stub.run(&["uninstall", "firefox", "--yes"]);
+    assert_eq!(output.code, Some(1), "stderr: {}", output.stderr);
+    assert!(
+        stub.home
+            .path()
+            .join(".config/firefox/profiles.ini")
+            .exists(),
+        "the package is still installed, so its configuration is still in use"
+    );
+    assert!(!stub.home.path().join(".local/share/Trash").exists());
+    let rows = log_rows(stub.home.path());
+    assert!(
+        rows.iter().all(|row| row["action"] == "FAILED"),
+        "a failed removal logs no trash move: {rows:?}"
+    );
+}
+
+#[test]
+fn uninstall_dry_run_json_names_the_same_leftovers() {
+    let stub = Pacman::new();
+    write(stub.home.path(), ".config/firefox/profiles.ini", "keep me");
+
+    let output = stub.run(&["uninstall", "firefox", "--dry-run", "--json"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("one document");
+    let leftovers = report["leftovers"].as_array().expect("leftovers");
+    assert_eq!(leftovers.len(), 1, "{report}");
+    assert_eq!(leftovers[0]["package"], "firefox");
+    assert_eq!(leftovers[0]["root"], "config");
+    assert_eq!(report["dry_run"], true);
+    assert_eq!(report["packages"], 2, "the transaction, not the request");
+    assert_eq!(report["command"][2], "pacman");
+    assert!(
+        report["leftover_results"]
+            .as_array()
+            .expect("results")
+            .is_empty(),
+        "a dry run reports no outcome"
+    );
+}

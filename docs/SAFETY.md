@@ -373,6 +373,41 @@ The trade-off is explicit: the elevated child is a little more code than a
 `sudo rm` wrapper, and the alternative — one process that acquires privilege and
 then keeps walking a directory tree — is a much larger privileged surface.
 
+### A package removal is pacman's transaction
+
+`uninstall` is the one command that changes the package database, and it does so
+by not doing it. There is no `/usr` deletion path in sweep: the command asks
+`pacman -Rs --print` what the transaction would be, shows exactly that, and then
+runs `pacman -Rs --noconfirm` for the same names. A dependent that blocks the
+removal is pacman's resolver answering, not a copy of its rules that could drift
+from it.
+
+The elevated argv is `run0 -- pacman -Rs --noconfirm <name>`. `pacman` is
+**unqualified** on purpose: `run0` and `sudo` look it up in their own
+root-controlled `PATH`, so a directory earlier in the invoking user's `PATH`
+cannot become the package manager that runs as root. Names travel as separate
+argv entries, never through a shell, and each one is checked before the argv is
+built — no leading `-`, no `/`, no space, no control byte — on top of the check
+that it appears in `pacman -Qe`.
+
+A short list of packages the machine needs to boot (`base`, `pacman`, `glibc`,
+`systemd`, the kernels, `filesystem`, `coreutils`, `bash`, `sudo`) is refused
+with the reason. The list is deliberately small: it is the boot path and the
+package manager, not every package that happens to matter to someone.
+
+`-Rs` rather than `-Rns` keeps an edited configuration file as `.pacsave`, which
+is the one thing a package manager can preserve for a file it no longer owns.
+
+What pacman leaves in `$HOME` is the user's data, and it is the only part of
+this command that sweep moves itself. Leftovers are matched by exact name in the
+four XDG roots — `~/.config/<name>`, `~/.local/share/<name>`, `~/.cache/<name>`,
+`~/.local/state/<name>` — with no prefix, suffix, case folding or vendor
+wildcard, and they are sent to the freedesktop trash rather than deleted, through
+the same code `analyze` uses. The move happens only after the removal succeeded:
+a nonzero status means the package is still installed and its configuration is
+still the one in use, so nothing is moved and every package in the transaction is
+logged as `FAILED` / `pacman_failed`.
+
 ---
 
 ## Residual risks

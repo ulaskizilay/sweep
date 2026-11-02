@@ -408,6 +408,22 @@ pub fn euid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
+/// Lets the default `SIGPIPE` disposition kill the process again.
+///
+/// Rust starts every program with `SIGPIPE` ignored, so a write to a closed
+/// pipe returns `EPIPE` instead of ending the process. That is the right default
+/// for a library and the wrong one for a CLI: `sweep uninstall | head` would
+/// print a panic message and exit 101, where every other Unix tool stops
+/// quietly at the first broken write. Restoring the default makes the shell
+/// pipeline behave the way the shell expects.
+pub fn die_on_broken_pipe() {
+    // SAFETY: `signal` with a valid signal number and `SIG_DFL` has no
+    // preconditions and no side effects beyond this process's disposition.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
 /// glibc's `makedev`: encodes a `(major, minor)` pair into a `dev_t`.
 ///
 /// `st_dev` and `/proc/self/mountinfo` report the same device differently, and

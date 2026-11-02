@@ -496,6 +496,84 @@ impl Elevator for SystemElevator {
     }
 }
 
+/// One elevated `pacman` transaction, as it happened.
+///
+/// A package removal is not a file deletion: pacman owns the transaction, the
+/// scriptlets and the database, and the honest thing to do is run it and report
+/// what it said. This type carries the argv that ran, so a caller can show it
+/// and a test can assert there is no shell in it.
+#[derive(Debug, Clone)]
+pub struct PackageRun {
+    pub argv: Vec<String>,
+    pub status: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+impl PackageRun {
+    pub fn success(&self) -> bool {
+        self.status == Some(0)
+    }
+}
+
+/// The exact argv for `pacman -Rs` through an elevator.
+///
+/// The package name is the only thing that varies, and it has already been
+/// checked against the installed set; this function re-checks the one property
+/// that matters — no name may begin with `-` — because an option injected here
+/// would be an option injected as root.
+pub fn package_argv(program: &Path, names: &[String]) -> io::Result<Vec<std::ffi::OsString>> {
+    if names.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "no packages named",
+        ));
+    }
+    for name in names {
+        if name.is_empty() || name.starts_with('-') || name.contains('/') || name.contains(' ') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("`{name}` is not a package name"),
+            ));
+        }
+    }
+    let mut argv = vec![
+        program.as_os_str().to_os_string(),
+        "--".into(),
+        // Unqualified on purpose: `run0` and `sudo` resolve it in their own
+        // root-controlled `PATH`, so a user-writable directory earlier in the
+        // user's `PATH` cannot become the root package manager.
+        "pacman".into(),
+        "-Rs".into(),
+        "--noconfirm".into(),
+    ];
+    argv.extend(names.iter().map(std::ffi::OsString::from));
+    Ok(argv)
+}
+
+impl SystemElevator {
+    /// Removes `names` with `pacman -Rs`, as root, and reports what it said.
+    ///
+    /// `-Rs` rather than `-Rns`: a configuration file the user edited is kept as
+    /// `.pacsave`, which is the one thing a package manager can preserve for a
+    /// file it no longer owns.
+    pub fn run_pacman(&self, names: &[String]) -> io::Result<PackageRun> {
+        let argv = package_argv(&self.program, names)?;
+        let mut command = Command::new(&argv[0]);
+        command.args(&argv[1..]);
+        let output = command.output()?;
+        Ok(PackageRun {
+            argv: argv
+                .iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect(),
+            status: output.status.code(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
+}
+
 fn parse_reply(stdout: &[u8]) -> io::Result<Reply> {
     let text = std::str::from_utf8(stdout)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;

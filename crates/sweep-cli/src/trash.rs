@@ -1,9 +1,11 @@
 //! Moving a chosen entry to the freedesktop trash.
 //!
-//! `analyze` is the one command whose deletion is recoverable, and it is
-//! recoverable because it is a move: the entry leaves the directory the user is
-//! looking at and arrives in `$XDG_DATA_HOME/Trash`, with a `.trashinfo` record
-//! that says where it came from. The desktop's own "Restore" does the rest.
+//! Two commands delete, and both delete recoverably because both delete by
+//! moving: `analyze` sends the entry the user picked, and `uninstall` sends the
+//! leftover directories of a package that is already gone. Either way the entry
+//! leaves the directory it was in and arrives in `$XDG_DATA_HOME/Trash` with a
+//! `.trashinfo` record that says where it came from, so the desktop's own
+//! "Restore" puts it back.
 //!
 //! Three things are deliberately not implemented:
 //!

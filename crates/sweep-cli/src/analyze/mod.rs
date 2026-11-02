@@ -15,7 +15,6 @@
 mod app;
 mod largest;
 mod measure;
-mod trash;
 mod ui;
 mod view;
 
