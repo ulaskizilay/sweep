@@ -20,7 +20,7 @@
 ## Status
 
 > **Pre-alpha.** `doctor`, `rules`, `clean`, `purge`, `installer`, `aur`,
-> `status` and `analyze` work. `clean` prints the plan, asks once, then deletes
+> `status`, `analyze`, `history` and `optimize` work. `clean` prints the plan, asks once, then deletes
 > through the single funnel and writes one operation-log row per decision;
 > `--dry-run` stops before the question and writes nothing at all. The catalog is
 > 108 rules over sixteen sections, and the section whose loss may not be
@@ -42,7 +42,8 @@
 | M5c | AUR helper caches: `aur` | done |
 | M6a | `status`: a read-only health summary, text and JSON | done |
 | M6b | `analyze`: the disk explorer and the large-file report | done |
-| M7 | `uninstall`, `optimize`, `history`, snapshot report | planned |
+| M7a | `history` and `optimize`: what sweep did, and the user-side indexes | done |
+| M7b | `uninstall`: package removal, the leftover scan | next |
 | M8 | packaging, man page, completions | planned |
 
 ## Why
@@ -306,7 +307,9 @@ cargo build --release
 | `sweep installer` | package and image files in `~/Downloads` that were never touched again | works |
 | `sweep status` | disk, inodes, memory, load, package cache, orphans, trash, last sweep; `--json` for scripts | works |
 | `sweep analyze` | the disk explorer, and `--largest` for a pipe; the only deletion is a move to the trash | works |
-| `sweep uninstall` / `optimize` / `history` | package removal, maintenance, past actions | M7 |
+| `sweep history` | every run from the operation log, grouped by session; `--json` for scripts | works |
+| `sweep optimize` | rebuild the user-side indexes through the tools that own them; system-wide tasks are named, never run as root | works |
+| `sweep uninstall` | package removal and the leftover scan | M7b |
 | `sweep aur` | built `.pkg.tar.*` archives in helper caches; clones and sources are reported, never taken | works |
 
 `sweep clean` is two phases. It plans — load the catalog, scan the roots,
@@ -388,6 +391,41 @@ sweep analyze — the 3 largest files below /home/you
 It reads up to 500 000 entries or 30 seconds, whichever comes first, and when a
 budget stops it the report says so instead of presenting a partial list as the
 whole answer. `--json` prints the same rows as one document.
+
+### History is the log, read back
+
+Every command that changes the machine writes one row per decision to
+`~/.local/state/sweep/operations.jsonl`. `sweep history` reads it and groups the
+rows into sessions, so the answer to "what did I agree to last week?" is one
+screen: when each run happened, what it removed, what it moved to the trash, and
+where it stopped. `--verbose` adds the skip codes per session — the difference
+between "12 skipped" and "12 skipped because the file changed under the plan" is
+the difference between a number and an answer.
+
+It is read-only, it never creates the log, and it reads a bounded tail rather
+than the whole file: eight mebibytes, reported on the last line, with sessions
+whose first rows fell outside that window marked `partial`. `--json` gives the
+same facts to a script.
+
+### Optimize rebuilds, it does not sweep
+
+`sweep optimize` runs the small set of user-side maintenance commands whose
+output is an index: your journal older than two weeks, the fontconfig index, the
+application index, and the MIME index. Each task is a program that already ships
+with the system, run with a fixed argv under a 120-second deadline, on a
+directory sweep knows how to read. Sweep never writes into those directories
+itself; the tool that owns an index is the only thing that should rewrite it.
+
+The system-wide half of the same maintenance — `mandb`, `fstrim`, the system
+journal — needs root, and sweep prints those commands instead of running them.
+The privileged path in sweep exists for one known set of cache roots; widening it
+to "run this as root" would turn a validated plan into a shell.
+
+A task whose program is not installed, or whose directory does not exist, is
+skipped with the reason, and a plan with nothing runnable is not a question worth
+asking. `--dry-run` prints the plan and the exact command lines and writes
+nothing; a run appends one `REBUILT` row per task, which is what `sweep history`
+shows afterwards.
 
 ## Development
 

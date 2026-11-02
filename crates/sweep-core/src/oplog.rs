@@ -13,9 +13,10 @@
 //! mid-sweep because a disk is full leaves the tree in a half-cleaned state with
 //! no record of which half.
 
+use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -28,6 +29,8 @@ pub enum Action {
     WouldRemove,
     /// Moved to the freedesktop trash, where it can be restored.
     Trashed,
+    /// Rewritten in place by the tool that owns it, as `optimize` does.
+    Rebuilt,
     Skipped,
     Failed,
 }
@@ -38,9 +41,122 @@ impl Action {
             Action::Removed => "REMOVED",
             Action::WouldRemove => "WOULD_REMOVE",
             Action::Trashed => "TRASHED",
+            Action::Rebuilt => "REBUILT",
             Action::Skipped => "SKIPPED",
             Action::Failed => "FAILED",
         }
+    }
+}
+
+/// One stored line, read back.
+///
+/// Separate from [`Record`] because a reader must tolerate what a writer may
+/// never produce: a row from an older build, or a line a disk filled up in the
+/// middle of. A required field that is missing makes the line malformed rather
+/// than fatal, and the caller reports how many it could not read.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LogRow {
+    pub ts: String,
+    pub cmd: String,
+    pub session: String,
+    pub action: Action,
+    pub rule: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub path_hex: Option<String>,
+    #[serde(default)]
+    pub bytes: u64,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+impl LogRow {
+    /// The path as it is on disk, exact when the log carried hex bytes.
+    pub fn path(&self) -> Option<PathBuf> {
+        match &self.path_hex {
+            Some(hex) => decode_hex(hex),
+            None if self.path.is_empty() => None,
+            None => Some(PathBuf::from(&self.path)),
+        }
+    }
+}
+
+/// What a tail read found.
+#[derive(Debug)]
+pub struct LogTail {
+    pub rows: Vec<LogRow>,
+    /// Lines that were not a complete record, skipped rather than fatal.
+    pub malformed: usize,
+    /// The window began after the start of the file, so older rows exist.
+    pub truncated: bool,
+    /// Total size of the log, so a caller can say what it read out of how much.
+    pub size: u64,
+}
+
+/// Reads the last `limit` bytes of an operation log.
+///
+/// A partial first line is dropped: half a JSON object is not a record. The
+/// read is deliberately bounded, because the log grows with every sweep and a
+/// history command must stay fast on a log that has been accumulating for a
+/// year.
+pub fn read_tail(path: &Path, limit: u64) -> io::Result<LogTail> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = File::open(path)?;
+    let size = file.metadata()?.len();
+    let start = size.saturating_sub(limit);
+    if start > 0 {
+        file.seek(SeekFrom::Start(start))?;
+    }
+    let mut raw = Vec::new();
+    file.read_to_end(&mut raw)?;
+    let text = String::from_utf8_lossy(&raw);
+    let mut lines: Vec<&str> = text.lines().collect();
+    if start > 0 && !lines.is_empty() {
+        lines.remove(0);
+    }
+    let mut rows = Vec::with_capacity(lines.len());
+    let mut malformed = 0;
+    for line in lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<LogRow>(line) {
+            Ok(row) => rows.push(row),
+            Err(_) => malformed += 1,
+        }
+    }
+    Ok(LogTail {
+        rows,
+        malformed,
+        truncated: start > 0,
+        size,
+    })
+}
+
+/// Decodes the lowercase hex [`encode_path`] writes, back into a path.
+pub fn decode_hex(hex: &str) -> Option<PathBuf> {
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(hex.len() / 2);
+    let mut chars = hex.as_bytes().chunks_exact(2);
+    for pair in &mut chars {
+        let high = value(pair[0])?;
+        let low = value(pair[1])?;
+        bytes.push(high << 4 | low);
+    }
+    Some(PathBuf::from(OsString::from_vec(bytes)))
+}
+
+fn value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -250,6 +366,100 @@ mod tests {
         );
         assert!(!raw[..raw.len() - 1].bytes().any(|byte| byte < 0x20));
         assert!(raw.contains("\\n"));
+    }
+
+    #[test]
+    fn a_written_record_reads_back_whole_including_a_non_utf8_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut log = Oplog::open(temp.path(), "history-test").unwrap();
+        let raw = std::ffi::OsStr::from_bytes(b"/tmp/bad-\xff-name");
+        let (path, hex) = encode_path(Path::new(raw));
+        log.append(Record {
+            ts: rfc3339(1_000_000_000),
+            cmd: "clean",
+            session: "history-test",
+            action: Action::Removed,
+            rule: "test.rule",
+            path,
+            path_hex: hex,
+            bytes: 4096,
+            reason: None,
+            detail: None,
+        });
+        let tail = read_tail(log.path(), 64 * 1024).unwrap();
+        assert_eq!(tail.rows.len(), 1);
+        assert_eq!(tail.malformed, 0);
+        assert!(!tail.truncated);
+        assert_eq!(tail.rows[0].action, Action::Removed);
+        assert_eq!(tail.rows[0].bytes, 4096);
+        assert_eq!(
+            tail.rows[0].path().as_deref(),
+            Some(Path::new(raw)),
+            "hex round-trips the exact bytes"
+        );
+    }
+
+    #[test]
+    fn a_half_written_line_is_counted_not_fatal() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("operations.jsonl");
+        let mut body = serialize(&Record {
+            ts: rfc3339(0),
+            cmd: "clean",
+            session: "s",
+            action: Action::Skipped,
+            rule: "r",
+            path: "/tmp/x".to_string(),
+            path_hex: None,
+            bytes: 0,
+            reason: Some("race_changed"),
+            detail: None,
+        })
+        .unwrap();
+        body.extend_from_slice(b"{\"ts\":\"2026-");
+        std::fs::write(&path, body).unwrap();
+
+        let tail = read_tail(&path, 64 * 1024).unwrap();
+        assert_eq!(tail.rows.len(), 1, "the complete row is kept");
+        assert_eq!(tail.malformed, 1, "the torn one is counted, not invented");
+    }
+
+    #[test]
+    fn a_tail_read_keeps_whole_records_and_says_it_was_truncated() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut log = Oplog::open(temp.path(), "s").unwrap();
+        for index in 0..50 {
+            log.append(Record {
+                ts: rfc3339(index),
+                cmd: "clean",
+                session: "s",
+                action: Action::Removed,
+                rule: "r",
+                path: format!("/tmp/{index}"),
+                path_hex: None,
+                bytes: index as u64,
+                reason: None,
+                detail: None,
+            });
+        }
+        let tail = read_tail(log.path(), 512).unwrap();
+        assert!(tail.truncated);
+        assert!(tail.rows.len() < 50);
+        assert!(
+            tail.rows.iter().all(|row| !row.path.is_empty()),
+            "no partial line became a row"
+        );
+        assert_eq!(
+            tail.rows.last().map(|row| row.path.as_str()),
+            Some("/tmp/49")
+        );
+    }
+
+    #[test]
+    fn a_missing_log_is_an_empty_history_not_an_error_to_report_as_history() {
+        let temp = tempfile::tempdir().unwrap();
+        let error = read_tail(&temp.path().join("nope.jsonl"), 1024).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]

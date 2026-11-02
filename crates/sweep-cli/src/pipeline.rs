@@ -288,6 +288,9 @@ impl FunnelReport {
                     out.removed += 1;
                     out.bytes = out.bytes.saturating_add(result.bytes);
                 }
+                // Only `optimize` rebuilds an index, and it does so in this
+                // process; the arm keeps the shared enum exhaustive.
+                Action::Rebuilt => out.removed += 1,
                 Action::Failed => out.failed += 1,
                 Action::Skipped => {
                     out.skipped += 1;
@@ -682,12 +685,7 @@ fn finish(json: bool, verbose: u8, report: &PipelineReport, code: u8) -> ExitCod
     ExitCode::from(code)
 }
 
-/// What the user said about deleting the plan.
-enum Consent {
-    Granted,
-    /// Refusal text, phrased so the user knows nothing happened and what to do.
-    Declined(String),
-}
+use crate::consent::Consent;
 
 /// What the user said about using root for the root-owned part of the plan.
 enum Elevation {
@@ -805,49 +803,20 @@ fn log_reply(oplog: Option<&mut Oplog>, cmd: &str, reply: &privilege::Reply) {
     }
 }
 
-/// Asks before deleting, and refuses when there is nobody to ask.
+/// Asks before deleting, in the shape every command's question has.
 ///
-/// The non-terminal case is the important one: a cron job, a pipe or a CI step
-/// would otherwise answer the prompt with whatever its stdin happens to be. It
-/// is a refusal rather than an automatic yes, and it names the flag that turns
-/// the question off.
+/// The decision itself is [`crate::consent::ask`]; this is only the sentence,
+/// which names the command, the count and the space so the question can be
+/// answered without scrolling back to the plan.
 fn confirm(command: &str, items: usize, bytes: u64, yes: bool) -> Consent {
-    if yes {
-        return Consent::Granted;
-    }
-    if !io::stdin().is_terminal() {
-        return Consent::Declined(format!(
-            "refusing to remove {items} items ({}) without confirmation: stdin is not a \
-             terminal. Re-run with --yes if that is what you meant; nothing was removed.",
+    crate::consent::ask(
+        &format!(
+            "sweep {command} will permanently remove {items} items ({}).\nContinue?",
             human_bytes(bytes)
-        ));
-    }
-
-    eprint!(
-        "sweep {command} will permanently remove {items} items ({}).\nContinue? [y/N] ",
-        human_bytes(bytes)
-    );
-    let _ = io::stderr().flush();
-
-    let mut answer = String::new();
-    match io::stdin().read_line(&mut answer) {
-        // EOF on a terminal: the user closed the prompt, which is a no.
-        Ok(0) => Consent::Declined("no answer on stdin; nothing was removed".to_string()),
-        Ok(_) => {
-            let answer = answer.trim().to_ascii_lowercase();
-            if answer == "y" || answer == "yes" {
-                Consent::Granted
-            } else {
-                Consent::Declined(format!(
-                    "cancelled; nothing was removed. Run `sweep {command} --dry-run` to review \
-                     the plan first."
-                ))
-            }
-        }
-        Err(error) => Consent::Declined(format!(
-            "cannot read the confirmation ({error}); nothing was removed"
-        )),
-    }
+        ),
+        &format!("remove {items} items ({})", human_bytes(bytes)),
+        yes,
+    )
 }
 
 struct Built {

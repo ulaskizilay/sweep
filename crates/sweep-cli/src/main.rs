@@ -6,8 +6,11 @@
 #![deny(unsafe_code)]
 
 mod analyze;
+mod consent;
 mod doctor;
 mod format;
+mod history;
+mod optimize;
 mod pipeline;
 mod rules;
 mod status;
@@ -106,6 +109,28 @@ enum Command {
         /// Apply the plan without asking. Required when stdin is not a terminal.
         #[arg(long)]
         yes: bool,
+    },
+
+    /// Rebuild the user-side indexes through the tools that own them.
+    Optimize {
+        /// Show the tasks and the commands, run nothing.
+        #[arg(long, conflicts_with = "yes")]
+        dry_run: bool,
+        /// Run without asking.
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// What sweep did: the operation log, grouped by run.
+    History {
+        /// How many runs to print, newest first (default 20).
+        #[arg(
+            long,
+            value_name = "N",
+            default_value_t = history::DEFAULT_SESSIONS,
+            value_parser = clap::value_parser!(u16).range(1..=1_000)
+        )]
+        limit: u16,
     },
 
     /// Explore disk usage, and move a chosen entry to the trash.
@@ -228,6 +253,8 @@ fn main() -> ExitCode {
             privileged,
         ),
         Command::Status => status::run(cli.json, cli.verbose),
+        Command::History { limit } => history::run(limit as usize, cli.json, cli.verbose),
+        Command::Optimize { dry_run, yes } => optimize::run(cli.json, cli.verbose, dry_run, yes),
         Command::Analyze { path, largest } => {
             analyze::run(path, largest.map(usize::from), cli.json, cli.verbose)
         }

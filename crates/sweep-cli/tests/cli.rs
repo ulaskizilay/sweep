@@ -709,7 +709,7 @@ fn clean_without_yes_on_a_pipe_declines_and_writes_nothing() {
         output.stderr
     );
     assert!(
-        output.stderr.contains("nothing was removed"),
+        output.stderr.contains("nothing was changed"),
         "the refusal must say what did not happen: {:?}",
         output.stderr
     );
@@ -1979,4 +1979,242 @@ fn analyze_reports_a_missing_root_instead_of_an_empty_one() {
         "a missing root must not read as a tiny tree: {:?}",
         output.stderr
     );
+}
+
+// ------------------------------------------------------------- history (M7) ---
+
+#[test]
+fn history_of_a_missing_log_explains_itself_and_exits_zero() {
+    let home = home();
+    let output = run_in(home.path(), &["history"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    assert!(
+        output.stdout.contains("nothing recorded yet"),
+        "an empty history is not an error:\n{}",
+        output.stdout
+    );
+    assert!(
+        !home
+            .path()
+            .join(".local/state/sweep/operations.jsonl")
+            .exists(),
+        "reading history must not create the log"
+    );
+}
+
+#[test]
+fn history_reads_back_what_clean_wrote() {
+    let home = home();
+    let blob = firefox_cache(home.path());
+    write(
+        home.path(),
+        ".cache/mozilla/firefox/profile/cache2/entries/blob",
+        "cache body",
+    );
+    let clean = run_in(home.path(), &["clean", "--yes"]);
+    assert_eq!(clean.code, Some(0), "stderr: {}", clean.stderr);
+
+    let before = snapshot(home.path());
+    let output = run_in(home.path(), &["history"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    assert!(output.stdout.contains("clean"), "\n{}", output.stdout);
+    assert!(output.stdout.contains("removed"), "\n{}", output.stdout);
+    assert!(
+        output.stdout.contains("operations.jsonl"),
+        "the summary names the log it read:\n{}",
+        output.stdout
+    );
+    assert_eq!(snapshot(home.path()), before, "history is read-only");
+
+    let json = run_in(home.path(), &["history", "--json"]);
+    assert_eq!(json.code, Some(0), "stderr: {}", json.stderr);
+    let report: serde_json::Value = serde_json::from_str(&json.stdout).expect("one document");
+    let sessions = report["sessions"].as_array().expect("sessions");
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0]["command"], "clean");
+    assert!(sessions[0]["counts"]["removed"].as_u64().unwrap_or(0) >= 1);
+    assert!(report["log"]["rows"].as_u64().unwrap_or(0) >= 1);
+    assert!(!blob.exists(), "the fixture really was removed");
+}
+
+#[test]
+fn history_limit_is_validated() {
+    let home = home();
+    let output = run_in(home.path(), &["history", "--limit", "0"]);
+    assert_eq!(output.code, Some(2), "stderr: {}", output.stderr);
+}
+
+// ------------------------------------------------------------ optimize (M7) ---
+
+/// A home with the four directories `optimize` knows about, plus a `PATH` of
+/// stub programs, so the test never rebuilds the developer's real indexes.
+fn optimize_home() -> (tempfile::TempDir, PathBuf) {
+    let home = home();
+    for relative in [
+        ".cache/fontconfig",
+        ".local/share/applications",
+        ".local/share/mime",
+    ] {
+        std::fs::create_dir_all(home.path().join(relative)).expect("mkdir");
+    }
+    let bin = home.path().join("stubbin");
+    std::fs::create_dir_all(&bin).expect("mkdir");
+    stub_timeout(&bin);
+    (home, bin)
+}
+
+fn stub(bin: &Path, name: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let path = bin.join(name);
+    std::fs::write(
+        &path,
+        format!("#!/bin/sh\necho \"{}\" >> \"$MARKER\"\nexit 0\n", name),
+    )
+    .expect("write stub");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+}
+
+/// A `timeout` that drops its deadline and runs the command, so the plan's
+/// real argv is exercised while `PATH` stays confined to the stub directory.
+fn stub_timeout(bin: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let path = bin.join("timeout");
+    std::fs::write(&path, "#!/bin/sh\nshift\nexec \"$@\"\n").expect("write stub");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+}
+
+fn run_with_path(home: &Path, path: &Path, args: &[&str]) -> Output {
+    let marker = home.join("marker");
+    collect(
+        sweep_in(home)
+            .env("PATH", path)
+            .env("MARKER", &marker)
+            .args(args)
+            .output()
+            .expect("spawn sweep"),
+    )
+}
+
+#[test]
+fn optimize_dry_run_lists_the_tasks_and_runs_nothing() {
+    let (home, bin) = optimize_home();
+    for name in [
+        "journalctl",
+        "fc-cache",
+        "update-desktop-database",
+        "update-mime-database",
+    ] {
+        stub(&bin, name);
+    }
+    let before = snapshot(home.path());
+
+    let output = run_with_path(home.path(), &bin, &["optimize", "--dry-run"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    for task in [
+        "journal-vacuum",
+        "font-cache",
+        "desktop-database",
+        "mime-database",
+    ] {
+        assert!(
+            output.stdout.contains(task),
+            "`{task}` is missing from the plan:\n{}",
+            output.stdout
+        );
+    }
+    assert!(
+        output.stdout.contains("sudo fstrim --all"),
+        "privileged maintenance is named, not run:\n{}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("nothing was run"),
+        "a dry run must say so:\n{}",
+        output.stdout
+    );
+    assert_eq!(snapshot(home.path()), before, "a dry run changes nothing");
+}
+
+#[test]
+fn optimize_runs_what_it_planned_and_records_it() {
+    let (home, bin) = optimize_home();
+    let names = [
+        "journalctl",
+        "fc-cache",
+        "update-desktop-database",
+        "update-mime-database",
+    ];
+    for name in names {
+        stub(&bin, name);
+    }
+
+    let output = run_with_path(home.path(), &bin, &["optimize", "--yes"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    let marker = std::fs::read_to_string(home.path().join("marker")).expect("marker");
+    for name in names {
+        assert!(
+            marker.lines().any(|line| line == name),
+            "`{name}` was planned but never ran:\n{marker}"
+        );
+    }
+
+    let rows = log_rows(home.path());
+    assert_eq!(rows.len(), names.len(), "one row per task: {rows:?}");
+    assert!(
+        rows.iter().all(|row| row["action"] == "REBUILT"),
+        "{rows:?}"
+    );
+    assert!(rows.iter().all(|row| row["cmd"] == "optimize"), "{rows:?}");
+
+    let history = run_in(home.path(), &["history", "--json"]);
+    let report: serde_json::Value = serde_json::from_str(&history.stdout).expect("json");
+    assert_eq!(report["sessions"][0]["command"], "optimize");
+    assert_eq!(report["sessions"][0]["counts"]["rebuilt"], 4);
+}
+
+#[test]
+fn optimize_without_yes_on_a_pipe_declines_and_runs_nothing() {
+    let (home, bin) = optimize_home();
+    for name in ["fc-cache", "journalctl"] {
+        stub(&bin, name);
+    }
+    let before = snapshot(home.path());
+
+    let output = run_with_path(home.path(), &bin, &["optimize"]);
+    assert_eq!(output.code, Some(5), "stderr: {}", output.stderr);
+    assert!(
+        output.stderr.contains("--yes"),
+        "the refusal names the way forward: {:?}",
+        output.stderr
+    );
+    assert!(
+        !home.path().join("marker").exists(),
+        "nothing may run when the question was never answered"
+    );
+    assert_eq!(snapshot(home.path()), before);
+}
+
+#[test]
+fn optimize_skips_a_task_whose_program_is_missing() {
+    let (home, bin) = optimize_home();
+    // Only one of the four programs exists.
+    stub(&bin, "fc-cache");
+
+    let output = run_with_path(home.path(), &bin, &["optimize", "--yes"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    assert!(
+        output.stdout.contains("journalctl is not installed"),
+        "a missing tool is named:\n{}",
+        output.stdout
+    );
+    let marker = std::fs::read_to_string(home.path().join("marker")).expect("marker");
+    assert_eq!(marker.trim(), "fc-cache", "only the present tool ran");
+    assert_eq!(log_rows(home.path()).len(), 1);
+}
+
+#[test]
+fn yes_with_dry_run_is_a_usage_error_for_optimize_too() {
+    let home = home();
+    let output = run_in(home.path(), &["optimize", "--yes", "--dry-run"]);
+    assert_eq!(output.code, Some(2), "stderr: {}", output.stderr);
 }
