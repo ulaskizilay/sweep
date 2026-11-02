@@ -31,7 +31,7 @@ without compiling.
 ```toml
 [[rule]]
 id          = "dev.cargo.crate-cache"     # required, namespaced, unique
-section     = "dev-tools"               # required, one of the seventeen sections
+section     = "dev-tools"               # required, one of the sixteen sections
 kind        = "dir-age"                 # required, see below
 root        = "{cache}/cargo"           # required, absolute, template allowed
 evidence    = "Cargo re-downloads ..."  # required for deleting kinds
@@ -57,8 +57,7 @@ documentation. It has no effect on behaviour.
 
 `system`, `user-essentials`, `app-caches`, `browsers`, `cloud-office`,
 `dev-tools`, `apps`, `virtualization`, `local-data`, `orphans`, `aur`,
-`firmware`, `snapshots`, `installers`, `large-files`, `project-artifacts`,
-`model-caches`.
+`firmware`, `snapshots`, `installers`, `project-artifacts`, `model-caches`.
 
 The list is closed. A new section is a product decision (it needs a row in the
 `clean` report), not something a pack can invent.
@@ -217,7 +216,7 @@ Every check below applies to the built-in packs and to the overlay equally.
 | `read_failed` | a file in `rules.d` could not be read |
 | `bad_id` | the id is empty, longer than 64 bytes, or has a character outside `[a-z0-9._-]` |
 | `duplicate_id` | the id already exists — including a built-in id, so the overlay cannot replace one |
-| `unknown_section` | the section is not one of the seventeen |
+| `unknown_section` | the section is not one of the sixteen |
 | `unknown_kind` | the kind is not one of the eight |
 | `unsupported_kind` | the kind exists but is not implemented yet (`if-missing-owner`) |
 | `bad_privilege` | the value is neither `user` nor `root` |

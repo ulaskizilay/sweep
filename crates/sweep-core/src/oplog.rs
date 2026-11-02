@@ -26,6 +26,8 @@ use serde::{Deserialize, Serialize};
 pub enum Action {
     Removed,
     WouldRemove,
+    /// Moved to the freedesktop trash, where it can be restored.
+    Trashed,
     Skipped,
     Failed,
 }
@@ -35,6 +37,7 @@ impl Action {
         match self {
             Action::Removed => "REMOVED",
             Action::WouldRemove => "WOULD_REMOVE",
+            Action::Trashed => "TRASHED",
             Action::Skipped => "SKIPPED",
             Action::Failed => "FAILED",
         }

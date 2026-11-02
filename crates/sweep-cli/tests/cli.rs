@@ -1862,3 +1862,121 @@ fn an_unknown_section_is_a_usage_error() {
         output.stderr
     );
 }
+
+// ------------------------------------------------------------- analyze (M6b) ---
+
+/// A home with three files of known size, one of them old.
+fn analyzed_home() -> tempfile::TempDir {
+    let home = home();
+    write(home.path(), "media/big.iso", &"x".repeat(64 * 1024));
+    write(home.path(), "notes.txt", &"y".repeat(1024));
+    write(
+        home.path(),
+        "media/nested/medium.bin",
+        &"z".repeat(8 * 1024),
+    );
+    age_file(&home.path().join("media/big.iso"), 40);
+    home
+}
+
+#[test]
+fn analyze_largest_reads_the_tree_and_deletes_nothing() {
+    let home = analyzed_home();
+    let before = snapshot(home.path());
+
+    let output = run_in(home.path(), &["analyze", "--largest", "2"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    assert!(
+        output.stdout.contains("big.iso"),
+        "the biggest file must lead the report:\n{}",
+        output.stdout
+    );
+    assert!(
+        !output.stdout.contains("notes.txt"),
+        "only N rows are printed:\n{}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("Nothing was deleted."),
+        "the report must say it only read:\n{}",
+        output.stdout
+    );
+    assert!(
+        output.stdout.contains("complete"),
+        "a small tree is walked whole:\n{}",
+        output.stdout
+    );
+    assert_eq!(snapshot(home.path()), before, "the report is read-only");
+    assert!(
+        !home
+            .path()
+            .join(".local/state/sweep/operations.jsonl")
+            .exists(),
+        "a read-only report writes no operation row"
+    );
+}
+
+#[test]
+fn analyze_largest_json_is_one_document_with_the_same_rows() {
+    let home = analyzed_home();
+    let before = snapshot(home.path());
+
+    let output = run_in(home.path(), &["analyze", "--largest", "3", "--json"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("one document");
+    assert_eq!(report["scanned"]["complete"], true);
+    assert_eq!(report["scanned"]["files"], 3);
+    let rows = report["largest"].as_array().expect("rows");
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["bytes"].as_u64(), Some(64 * 1024));
+    assert!(rows[0]["path"]
+        .as_str()
+        .unwrap_or_default()
+        .ends_with("media/big.iso"));
+    assert!(
+        rows[0]["modified_days"].as_u64().unwrap_or(0) >= 39,
+        "the report says how old the file is: {}",
+        rows[0]
+    );
+    assert_eq!(snapshot(home.path()), before);
+}
+
+#[test]
+fn a_bare_analyze_without_a_terminal_names_the_mode_that_works() {
+    let home = analyzed_home();
+    let before = snapshot(home.path());
+
+    // The tests run with both ends on a pipe, which is exactly the case the
+    // gate exists for: a full-screen explorer cannot draw there.
+    let output = run_in(home.path(), &["analyze"]);
+    assert_eq!(output.code, Some(78), "stderr: {}", output.stderr);
+    assert!(
+        output.stderr.contains("--largest"),
+        "the refusal must name the mode that works in a pipe: {:?}",
+        output.stderr
+    );
+    assert_eq!(snapshot(home.path()), before, "a refusal changes nothing");
+}
+
+#[test]
+fn analyze_largest_zero_is_a_usage_error() {
+    let home = home();
+    let output = run_in(home.path(), &["analyze", "--largest", "0"]);
+    assert_eq!(output.code, Some(2), "stderr: {}", output.stderr);
+}
+
+#[test]
+fn analyze_reports_a_missing_root_instead_of_an_empty_one() {
+    let home = home();
+    let missing = home.path().join("not-there");
+    let output = run_in(
+        home.path(),
+        &["analyze", &missing.display().to_string(), "--largest"],
+    );
+    assert_eq!(output.code, Some(78), "stderr: {}", output.stderr);
+    assert!(
+        output.stderr.contains("cannot read"),
+        "a missing root must not read as a tiny tree: {:?}",
+        output.stderr
+    );
+}

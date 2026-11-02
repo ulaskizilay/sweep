@@ -19,14 +19,14 @@
 
 ## Status
 
-> **Pre-alpha.** `doctor`, `rules`, `clean`, `purge`, `installer`, `aur` and
-> `status` work. `clean` prints the plan, asks once, then deletes through the
-> single funnel and writes one operation-log row per decision; `--dry-run` stops
-> before the question and writes nothing at all. The catalog is 109 rules over
-> seventeen sections, and the section whose loss may not be recoverable —
-> downloaded model weights — is skipped unless you name it. System caches are
-> swept through a second process: `sweep` never runs as root, so it plans as you
-> and asks before elevating.
+> **Pre-alpha.** `doctor`, `rules`, `clean`, `purge`, `installer`, `aur`,
+> `status` and `analyze` work. `clean` prints the plan, asks once, then deletes
+> through the single funnel and writes one operation-log row per decision;
+> `--dry-run` stops before the question and writes nothing at all. The catalog is
+> 108 rules over sixteen sections, and the section whose loss may not be
+> recoverable — downloaded model weights — is skipped unless you name it. System
+> caches are swept through a second process: `sweep` never runs as root, so it
+> plans as you and asks before elevating.
 
 | Milestone | Scope | State |
 |---|---|---|
@@ -41,7 +41,7 @@
 | M5b | `installer`: downloaded package and image files | done |
 | M5c | AUR helper caches: `aur` | done |
 | M6a | `status`: a read-only health summary, text and JSON | done |
-| M6b | `analyze`: the disk explorer and the large-file report | next |
+| M6b | `analyze`: the disk explorer and the large-file report | done |
 | M7 | `uninstall`, `optimize`, `history`, snapshot report | planned |
 | M8 | packaging, man page, completions | planned |
 
@@ -109,13 +109,13 @@ is in [`docs/SAFETY.md`](docs/SAFETY.md).
 ## The rules
 
 The catalog is TOML, and it is data rather than code: `rules/01-system.toml`
-through `rules/17-model-caches.toml`, 109 rules over seventeen sections, 94
+through `rules/16-model-caches.toml`, 108 rules over sixteen sections, 94
 enabled in this build. Each rule names a root, a kind, a retention and the
 sentence that justifies deleting there.
 
 ```bash
 $ sweep rules list
-sweep rules — 17 packs, 109 rules, 94 enabled
+sweep rules — 16 packs, 108 rules, 94 enabled
 
   section            rules  enabled
   system                 8        5
@@ -305,7 +305,7 @@ cargo build --release
 | `sweep purge` | `node_modules`, `target`, virtualenvs — only where a manifest says a build made them | works |
 | `sweep installer` | package and image files in `~/Downloads` that were never touched again | works |
 | `sweep status` | disk, inodes, memory, load, package cache, orphans, trash, last sweep; `--json` for scripts | works |
-| `sweep analyze` | disk explorer, files over a gigabyte, Trash-based ad hoc cleanup | M6b |
+| `sweep analyze` | the disk explorer, and `--largest` for a pipe; the only deletion is a move to the trash | works |
 | `sweep uninstall` / `optimize` / `history` | package removal, maintenance, past actions | M7 |
 | `sweep aur` | built `.pkg.tar.*` archives in helper caches; clones and sources are reported, never taken | works |
 
@@ -350,6 +350,44 @@ not keep.
 script that should not parse the prose. The last-run row sums the newest session
 in the operation log; if a session is longer than the 64 KiB tail window, the row
 says `at least N items` rather than printing a short total as if it were whole.
+
+### The explorer moves, it does not delete
+
+`sweep analyze` without arguments opens a full-screen explorer over `$HOME`, or
+over the directory you name. It reads sizes, sorts by size, name or age, filters
+by name, and descends into a directory. It writes nothing until you press `d` and
+then `y`, and that pair moves the selected entry to the freedesktop trash in
+`$XDG_DATA_HOME/Trash` — `files/` for the payload, `info/` for the record that
+lets your desktop restore it. Every move appends one `TRASHED` row to the
+operation log.
+
+The same path policy as every other command applies: protected roots, `~/.ssh`,
+keyrings, the state directory and the trash itself are refused, and so is a path
+with a symbolic link anywhere above it. A link is moved as a link; what it points
+at is never touched. `renameat(2)` refuses to cross a filesystem, so an entry on
+another mount is a refusal rather than a copy that can be interrupted halfway:
+sweep does not yet implement the per-mount top directory trash that would make it
+work, and saying so is better than half a move.
+
+`--largest` is the mode for a pipe, a script or a machine without a terminal:
+
+```console
+$ sweep analyze --largest 3
+sweep analyze — the 3 largest files below /home/you
+
+        size   modified  path
+     3.8 GiB    10 days  /home/you/.android/avd/phone.avd/snapshots/ram.bin
+     2.4 GiB    10 days  /home/you/.android/avd/phone.avd/userdata-qemu.img.qcow2
+     1.3 GiB      today  /home/you/.cache/paru/clone/tool/tool-1.2-1-x86_64.pkg.tar.zst
+
+  scanned 423,506 files (499,838 entries, 63.3 GiB) in 10.3s — the entry budget stopped the walk, so larger files may exist
+  Nothing was deleted. `sweep analyze` opens the explorer, where a chosen
+  entry is moved to the trash and can be restored.
+```
+
+It reads up to 500 000 entries or 30 seconds, whichever comes first, and when a
+budget stops it the report says so instead of presenting a partial list as the
+whole answer. `--json` prints the same rows as one document.
 
 ## Development
 

@@ -247,6 +247,70 @@ pub fn unlink_beneath(dirfd: &OwnedFd, name: &OsStr, is_dir: bool) -> io::Result
     }
 }
 
+/// Renames one entry between two already-open directories.
+///
+/// Both handles were opened without following a symbolic link, and both names
+/// are single components, so the move cannot be redirected through an ancestor
+/// that changed between the decision and the call. `renameat` also refuses to
+/// cross a filesystem, which is the honest answer for a move into a trash
+/// directory on another mount: copying and deleting would turn a recoverable
+/// move into a slow, half-finished one.
+pub fn rename_beneath(
+    from_dir: &OwnedFd,
+    from: &OsStr,
+    to_dir: &OwnedFd,
+    to: &OsStr,
+) -> io::Result<()> {
+    let c_from = CString::new(from.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL byte in file name"))?;
+    let c_to = CString::new(to.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL byte in file name"))?;
+    // SAFETY: both descriptors are live directory handles and both names are
+    // valid NUL-terminated single components with no separator.
+    let rc = unsafe {
+        libc::renameat(
+            from_dir.as_raw_fd(),
+            c_from.as_ptr(),
+            to_dir.as_raw_fd(),
+            c_to.as_ptr(),
+        )
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+/// `YYYY-MM-DDTHH:MM:SS` in local time, the shape the trash specification asks
+/// for.
+///
+/// Local rather than UTC because a desktop read of the record shows the deletion
+/// date to the user, and a UTC stamp would be wrong by their offset. A zone that
+/// cannot be resolved falls back to UTC rather than refusing the move.
+pub fn local_timestamp() -> String {
+    // SAFETY: `time` with a null pointer only reads the clock.
+    let now = unsafe { libc::time(std::ptr::null_mut()) };
+    // SAFETY: all-zero is a valid `tm`, and `localtime_r` fills it in.
+    let mut broken: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers are valid for the duration of the call, and the
+    // out-parameter is owned by this frame.
+    let rc = unsafe { libc::localtime_r(&now, &mut broken) };
+    if rc.is_null() {
+        let utc = crate::oplog::rfc3339(now as i64);
+        return utc.trim_end_matches('Z').to_string();
+    }
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+        broken.tm_year + 1900,
+        broken.tm_mon + 1,
+        broken.tm_mday,
+        broken.tm_hour,
+        broken.tm_min,
+        broken.tm_sec
+    )
+}
+
 /// Filesystem space counters, in bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Space {

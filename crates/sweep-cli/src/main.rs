@@ -5,6 +5,7 @@
 
 #![deny(unsafe_code)]
 
+mod analyze;
 mod doctor;
 mod format;
 mod pipeline;
@@ -107,6 +108,27 @@ enum Command {
         yes: bool,
     },
 
+    /// Explore disk usage, and move a chosen entry to the trash.
+    ///
+    /// Without `--largest` this opens a full-screen explorer over the given
+    /// directory, or over $HOME. `--largest` prints the biggest files and exits,
+    /// which is the mode that works in a pipe.
+    Analyze {
+        /// Directory to explore. Defaults to $HOME.
+        #[arg(value_name = "PATH")]
+        path: Option<std::path::PathBuf>,
+
+        /// Print the N largest files below the root and exit (default 20).
+        #[arg(
+            long,
+            value_name = "N",
+            num_args = 0..=1,
+            default_missing_value = "20",
+            value_parser = clap::value_parser!(u16).range(1..=10_000)
+        )]
+        largest: Option<u16>,
+    },
+
     /// Remove built package archives from AUR helper caches.
     ///
     /// The clone, the sources and the PKGBUILD stay: an edited recipe exists
@@ -206,6 +228,9 @@ fn main() -> ExitCode {
             privileged,
         ),
         Command::Status => status::run(cli.json, cli.verbose),
+        Command::Analyze { path, largest } => {
+            analyze::run(path, largest.map(usize::from), cli.json, cli.verbose)
+        }
         Command::Aur { dry_run, yes } => pipeline::run(
             pipeline::Scope::AUR,
             cli.json,

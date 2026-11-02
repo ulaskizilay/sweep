@@ -14,6 +14,9 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+crossterm = "0.29.0"
+libc.workspace = true
+ratatui = "0.29.0"
 serde = { workspace = true }
 serde_json.workspace = true
 sweep-core = { path = "../sweep-core" }

@@ -280,6 +280,14 @@ impl FunnelReport {
                     out.bytes = out.bytes.saturating_add(result.bytes);
                 }
                 Action::WouldRemove => out.would_remove += 1,
+                // The elevation reply never carries this: only `analyze` moves
+                // an entry to the trash, and it does so in this process. The arm
+                // exists because the enum is shared, and counting a move as a
+                // removal is true about the space and false about nothing.
+                Action::Trashed => {
+                    out.removed += 1;
+                    out.bytes = out.bytes.saturating_add(result.bytes);
+                }
                 Action::Failed => out.failed += 1,
                 Action::Skipped => {
                     out.skipped += 1;

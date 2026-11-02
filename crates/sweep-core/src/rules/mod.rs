@@ -49,13 +49,12 @@ pub enum Section {
     Firmware,
     Snapshots,
     Installers,
-    LargeFiles,
     ProjectArtifacts,
     ModelCaches,
 }
 
 impl Section {
-    pub const ALL: [Section; 17] = [
+    pub const ALL: [Section; 16] = [
         Section::System,
         Section::UserEssentials,
         Section::AppCaches,
@@ -70,7 +69,6 @@ impl Section {
         Section::Firmware,
         Section::Snapshots,
         Section::Installers,
-        Section::LargeFiles,
         Section::ProjectArtifacts,
         Section::ModelCaches,
     ];
@@ -91,7 +89,6 @@ impl Section {
             Section::Firmware => "firmware",
             Section::Snapshots => "snapshots",
             Section::Installers => "installers",
-            Section::LargeFiles => "large-files",
             Section::ProjectArtifacts => "project-artifacts",
             Section::ModelCaches => "model-caches",
         }
@@ -599,7 +596,7 @@ mod tests {
 
     #[test]
     fn every_section_round_trips_through_its_name() {
-        assert_eq!(Section::ALL.len(), 17);
+        assert_eq!(Section::ALL.len(), 16);
         for section in Section::ALL {
             assert_eq!(Section::parse(section.as_str()), Some(section));
             assert_eq!(
@@ -795,7 +792,7 @@ enabled = false
         ids.dedup();
         assert_eq!(ids.len(), before, "duplicate built-in rule id");
         let covered: BTreeSet<Section> = set.rules().iter().map(|r| r.section).collect();
-        assert_eq!(covered.len(), 17, "every section needs at least one rule");
+        assert_eq!(covered.len(), 16, "every section needs at least one rule");
     }
 
     #[test]
