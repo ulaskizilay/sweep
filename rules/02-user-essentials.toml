@@ -48,7 +48,7 @@ id = "user.trash.report"
 section = "user-essentials"
 kind = "report-only"
 root = "{data}/Trash/files"
-evidence = "Reported, never deleted: paired removal of files/ and info/ arrives with the trash handler."
+evidence = "Reported, never deleted: sweep moves entries into the trash and never empties it; that stays the file manager's call."
 keep_days = 30
 privilege = "user"
 

@@ -345,9 +345,7 @@ fn render(report: &ListReport, verbose: u8) -> String {
         }
     }
 
-    out.push_str(
-        "\n  on = runs, off = declared disabled, root = needs privilege (arrives in M4)\n",
-    );
+    out.push_str("\n  on = runs, off = declared disabled, root = deleted by the elevated child\n");
     out
 }
 
