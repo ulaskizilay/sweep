@@ -285,11 +285,12 @@ sections that genuinely need privilege will ask for it one operation at a time.
 
 ## Install
 
-The AUR package tracks `main`:
+The tracking package builds `main`, and it lives in this repository until it is
+submitted to the AUR:
 
 ```bash
-git clone https://aur.archlinux.org/sweep-cli-git.git
-cd sweep-cli-git
+git clone https://github.com/ulaskizilay/sweep.git
+cd sweep/packaging/sweep-cli-git
 makepkg -si
 ```
 
@@ -302,9 +303,9 @@ cargo build --release --locked
 ./target/release/sweep doctor
 ```
 
-A stable `sweep-cli` package is published from the first `V*` tag. The PKGBUILD
-for the tracking package, and what the stable one needs, is in
-[`packaging/`](packaging/README.md).
+A stable `sweep-cli` package needs a `V*` tag, a tarball checksum and
+`updpkgsums`; [`packaging/README.md`](packaging/README.md) lists what it takes,
+and why neither package is faked here.
 
 ### Completions and the man page
 
