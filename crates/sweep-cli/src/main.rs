@@ -11,6 +11,7 @@ mod doctor;
 mod format;
 mod history;
 mod optimize;
+mod packaging;
 mod pipeline;
 mod rules;
 mod status;
@@ -34,7 +35,7 @@ use sweep_core::rules::Section;
                   touch package-owned, read-only, or symlinked-out paths.",
     disable_help_subcommand = true
 )]
-struct Cli {
+pub(crate) struct Cli {
     /// Machine-readable JSON output.
     #[arg(long, global = true)]
     json: bool,
@@ -190,6 +191,24 @@ enum Command {
         yes: bool,
     },
 
+    /// Print a completion script for one shell.
+    ///
+    /// Written to stdout so the package build can redirect it; sweep never
+    /// writes into your home directory on request.
+    Completions {
+        #[arg(value_name = "SHELL")]
+        shell: clap_complete::Shell,
+    },
+
+    /// Internal: print one man page, for the package build.
+    ///
+    /// No argument is `sweep.1`; `rules list` is `sweep-rules-list.1`.
+    #[command(name = "__manpage", hide = true)]
+    Manpage {
+        #[arg(value_name = "COMMAND", num_args = 0..)]
+        command: Vec<String>,
+    },
+
     /// Internal: remove root-owned items on behalf of `clean`.
     ///
     /// Hidden, undocumented and never called by a user. It exists so the
@@ -218,6 +237,13 @@ pub(crate) const EXIT_NOT_IMPLEMENTED: u8 = 4;
 
 /// Exit code for a rule catalog that failed to load.
 pub(crate) const EXIT_INVALID_RULES: u8 = 3;
+
+/// Exit code for a command line that cannot be acted on.
+///
+/// `clap` already uses it for a mistyped flag; `__manpage` uses it for a page
+/// path that is not a command, which is the same mistake made by a build script
+/// instead of a person.
+pub(crate) const EXIT_USAGE: u8 = 2;
 
 /// Exit code for a run the user did not confirm.
 ///
@@ -316,6 +342,8 @@ fn main() -> ExitCode {
             yes,
             false,
         ),
+        Command::Completions { shell } => packaging::completions(shell),
+        Command::Manpage { command } => packaging::manpage(&command),
         Command::Apply => unreachable!("handled before the root refusal"),
     }
 }

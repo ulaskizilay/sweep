@@ -2731,3 +2731,127 @@ fn uninstall_dry_run_json_names_the_same_leftovers() {
         "a dry run reports no outcome"
     );
 }
+
+// -------------------------------------------------- completions and man page ---
+//
+// Both print and exit. Neither may write into `$HOME`: a packaged command that
+// creates files on request is a second install path with its own permissions
+// and its own cleanup, for artifacts a package manager already owns.
+
+#[test]
+fn completions_print_a_script_for_each_shell() {
+    for (shell, marker) in [
+        ("bash", "_sweep()"),
+        ("zsh", "#compdef sweep"),
+        ("fish", "complete -c sweep"),
+    ] {
+        let temporary = home();
+        let before = snapshot(temporary.path());
+        let output = run_in(temporary.path(), &["completions", shell]);
+        assert_eq!(output.code, Some(0), "{shell} stderr: {}", output.stderr);
+        assert!(
+            output.stdout.contains(marker),
+            "the {shell} script must be about sweep, got:\n{}",
+            &output.stdout[..output.stdout.len().min(400)]
+        );
+        assert!(
+            !output.stdout.contains("__apply"),
+            "the elevated child is not a user command, so it is not completed"
+        );
+        assert_eq!(
+            snapshot(temporary.path()),
+            before,
+            "a completion script is printed, not installed"
+        );
+    }
+}
+
+#[test]
+fn completions_refuse_a_shell_they_do_not_know() {
+    let temporary = home();
+    let before = snapshot(temporary.path());
+    let output = run_in(temporary.path(), &["completions", "tcsh"]);
+    assert_eq!(output.code, Some(2), "stderr: {}", output.stderr);
+    assert!(
+        output.stdout.is_empty(),
+        "a usage error prints nothing on stdout: {:?}",
+        output.stdout
+    );
+    assert_eq!(snapshot(temporary.path()), before);
+}
+
+#[test]
+fn the_man_page_is_roff_and_names_the_real_commands() {
+    let temporary = home();
+    let before = snapshot(temporary.path());
+    let output = run_in(temporary.path(), &["__manpage"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    assert!(
+        output.stdout.starts_with(".ie \\n(.g .ds Aq") || output.stdout.starts_with(".TH "),
+        "a man page is roff, not markdown:\n{}",
+        &output.stdout[..output.stdout.len().min(200)]
+    );
+    assert!(output.stdout.contains(".TH sweep 1"), "{}", output.stdout);
+    for command in ["clean", "uninstall", "analyze", "completions"] {
+        assert!(
+            output.stdout.contains(command),
+            "`{command}` is missing from the page"
+        );
+    }
+    assert!(
+        !output.stdout.contains("__apply"),
+        "the elevated child is internal and stays out of the page"
+    );
+    assert!(
+        !output.stdout.contains("sweep-help(1)") && !output.stdout.contains("sweep\\-help(1)"),
+        "a page nobody ships must not be named"
+    );
+    assert_eq!(snapshot(temporary.path()), before);
+}
+
+#[test]
+fn a_subcommand_has_its_own_page_under_the_name_the_top_page_uses() {
+    let temporary = home();
+    let before = snapshot(temporary.path());
+
+    for (title, path) in [
+        ("sweep-clean", vec!["clean"]),
+        ("sweep-rules-list", vec!["rules", "list"]),
+    ] {
+        let mut args = vec!["__manpage"];
+        args.extend(path.iter());
+        let output = run_in(temporary.path(), &args);
+        assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+        assert!(
+            output.stdout.contains(&format!(".TH {title} 1")),
+            "the page must be titled `{title}` so the reference resolves:\n{}",
+            output.stdout
+        );
+        assert!(
+            output
+                .stdout
+                .contains(&format!("{} \\- ", title.replace('-', "\\-"))),
+            "the NAME line names the page:\n{}",
+            output.stdout
+        );
+        assert!(
+            !output.stdout.contains("--version"),
+            "`sweep {}` has no --version, so its page must not offer one",
+            path.join(" ")
+        );
+    }
+    assert_eq!(snapshot(temporary.path()), before);
+}
+
+#[test]
+fn a_page_for_something_that_is_not_a_command_is_a_usage_error() {
+    let temporary = home();
+    let output = run_in(temporary.path(), &["__manpage", "nosuchcommand"]);
+    assert_eq!(output.code, Some(2), "stderr: {}", output.stderr);
+    assert!(
+        output.stderr.contains("not a command of sweep"),
+        "{:?}",
+        output.stderr
+    );
+    assert!(output.stdout.is_empty(), "{:?}", output.stdout);
+}

@@ -1,0 +1,100 @@
+# Maintainer: Ulaş KIZILAY <ulaskizilay@users.noreply.github.com>
+#
+# The tracking package: it builds whatever `main` is at build time, so the
+# version string carries the commit it was made from rather than a release
+# number it would otherwise have to lie about.
+#
+# A stable package named `sweep-cli` is published from git tags. Nothing here
+# fabricates one: a released build needs a tag, a checksum and an `.SRCINFO`
+# generated with `makepkg --printsrcinfo`, and pretending otherwise would give
+# the stable package a moving source.
+
+pkgname=sweep-cli-git
+pkgver=r20.2739763
+pkgrel=1
+pkgdesc='Terminal cleanup and maintenance for Arch Linux'
+arch=('x86_64' 'aarch64')
+url='https://github.com/ulaskizilay/sweep'
+license=('MIT')
+depends=('gcc-libs' 'glibc')
+makedepends=('cargo' 'git' 'rust')
+provides=('sweep-cli' 'sweep')
+conflicts=('sweep-cli' 'sweep')
+source=("$pkgname::git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$pkgname"
+  printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+  cd "$pkgname"
+  # `--locked` rather than `--frozen`: the manifest and the lock file must agree,
+  # and a dependency that needs fetching is fetched from the versions the lock
+  # file names instead of drifting to the newest compatible one.
+  cargo fetch --locked
+}
+
+build() {
+  cd "$pkgname"
+  cargo build --release --locked --offline
+}
+
+check() {
+  cd "$pkgname"
+  cargo test --release --locked --offline
+}
+
+package() {
+  cd "$pkgname"
+
+  install -Dm755 target/release/sweep "$pkgdir/usr/bin/sweep"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+  # Completions and the man pages come from the same `clap` definition the parser
+  # uses, so an option cannot exist in `--help` and be missing here.
+  install -d "$pkgdir/usr/share/bash-completion/completions"
+  install -d "$pkgdir/usr/share/zsh/site-functions"
+  install -d "$pkgdir/usr/share/fish/vendor_completions.d"
+  install -d "$pkgdir/usr/share/man/man1"
+
+  target/release/sweep completions bash \
+    > "$pkgdir/usr/share/bash-completion/completions/sweep"
+  target/release/sweep completions zsh \
+    > "$pkgdir/usr/share/zsh/site-functions/_sweep"
+  target/release/sweep completions fish \
+    > "$pkgdir/usr/share/fish/vendor_completions.d/sweep.fish"
+
+  # One page per command: the top page names its subcommands as
+  # `sweep-clean(1)`, and a name without a page behind it is a dead end for
+  # anyone who typed `man sweep-clean`. Adding a command means adding a line
+  # here; `__manpage <name>` refuses a name that is not a command.
+  man_page() {
+    local page=$1
+    shift
+    target/release/sweep __manpage "$@" > "$pkgdir/usr/share/man/man1/$page.1"
+  }
+
+  man_page sweep
+  man_page sweep-doctor doctor
+  man_page sweep-rules rules
+  man_page sweep-rules-list rules list
+  man_page sweep-rules-verify rules verify
+  man_page sweep-clean clean
+  man_page sweep-status status
+  man_page sweep-purge purge
+  man_page sweep-installer installer
+  man_page sweep-uninstall uninstall
+  man_page sweep-optimize optimize
+  man_page sweep-history history
+  man_page sweep-analyze analyze
+  man_page sweep-aur aur
+  man_page sweep-completions completions
+
+  chmod 644 \
+    "$pkgdir/usr/share/bash-completion/completions/sweep" \
+    "$pkgdir/usr/share/zsh/site-functions/_sweep" \
+    "$pkgdir/usr/share/fish/vendor_completions.d/sweep.fish" \
+    "$pkgdir"/usr/share/man/man1/*.1
+}

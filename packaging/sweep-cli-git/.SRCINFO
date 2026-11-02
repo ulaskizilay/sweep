@@ -1,0 +1,21 @@
+pkgbase = sweep-cli-git
+	pkgdesc = Terminal cleanup and maintenance for Arch Linux
+	pkgver = r20.2739763
+	pkgrel = 1
+	url = https://github.com/ulaskizilay/sweep
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	makedepends = cargo
+	makedepends = git
+	makedepends = rust
+	depends = gcc-libs
+	depends = glibc
+	provides = sweep-cli
+	provides = sweep
+	conflicts = sweep-cli
+	conflicts = sweep
+	source = sweep-cli-git::git+https://github.com/ulaskizilay/sweep.git
+	sha256sums = SKIP
+
+pkgname = sweep-cli-git

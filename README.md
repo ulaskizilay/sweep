@@ -45,7 +45,7 @@
 | M6b | `analyze`: the disk explorer and the large-file report | done |
 | M7a | `history` and `optimize`: what sweep did, and the user-side indexes | done |
 | M7b | `uninstall`: pacman's transaction, the leftover scan | done |
-| M8 | packaging, man page, completions | planned |
+| M8 | packaging, man page, completions | done |
 
 ## Why
 
@@ -285,14 +285,46 @@ sections that genuinely need privilege will ask for it one operation at a time.
 
 ## Install
 
-Not packaged yet.
+The AUR package tracks `main`:
+
+```bash
+git clone https://aur.archlinux.org/sweep-cli-git.git
+cd sweep-cli-git
+makepkg -si
+```
+
+Or build it yourself:
 
 ```bash
 git clone https://github.com/ulaskizilay/sweep.git
 cd sweep
-cargo build --release
+cargo build --release --locked
 ./target/release/sweep doctor
 ```
+
+A stable `sweep-cli` package is published from the first `V*` tag. The PKGBUILD
+for the tracking package, and what the stable one needs, is in
+[`packaging/`](packaging/README.md).
+
+### Completions and the man page
+
+Both are generated from the same `clap` definition the parser uses, so an option
+that exists in `--help` exists in all of them:
+
+```bash
+sweep completions bash > /usr/share/bash-completion/completions/sweep
+sweep completions zsh  > /usr/share/zsh/site-functions/_sweep
+sweep completions fish > /usr/share/fish/vendor_completions.d/sweep.fish
+
+sweep __manpage            > /usr/share/man/man1/sweep.1
+sweep __manpage clean      > /usr/share/man/man1/sweep-clean.1
+```
+
+Nothing is written into `$HOME`: the commands print, and moving the output into
+place is the package manager's job. `__manpage` takes a command path, because the
+top page refers to `sweep-clean(1)` and a reference to a page that is not
+installed is a dead end; it is hidden from `--help` and from the completions,
+because it is a build helper, not a command to type.
 
 ## Commands
 
@@ -312,6 +344,8 @@ cargo build --release
 | `sweep optimize` | rebuild the user-side indexes through the tools that own them; system-wide tasks are named, never run as root | works |
 | `sweep uninstall` | an inventory, or pacman's own removal transaction; leftovers go to the trash | works |
 | `sweep aur` | built `.pkg.tar.*` archives in helper caches; clones and sources are reported, never taken | works |
+| `sweep completions <shell>` | the bash, zsh or fish completion script, printed for the package build | works |
+| `sweep __manpage` | the man pages, printed for the package build | internal |
 
 `sweep clean` is two phases. It plans — load the catalog, scan the roots,
 validate every candidate — and only then asks. The question is skipped with

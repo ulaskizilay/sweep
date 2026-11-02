@@ -13,7 +13,9 @@ name = "sweep"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
+clap.workspace = true
+clap_complete.workspace = true
+clap_mangen.workspace = true
 crossterm = "0.29.0"
 libc.workspace = true
 ratatui = "0.29.0"
