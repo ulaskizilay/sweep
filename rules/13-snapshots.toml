@@ -10,10 +10,10 @@
 #     still on disk.
 #   * A backup the user forgot about is the one that saves them.
 #
-# The report is produced by reading each tool's own listing (`snapper list
+# The report would be produced by reading each tool's own listing (`snapper list
 # --csvout`, `timeshift --list`, `btrfs subvolume list`, `zfs list -t snapshot`),
-# which arrives with the snapshot report in M7. Until then these rules describe
-# the targets so `sweep rules list` shows the section, and they stay disabled
+# and sweep does not read any of them. So these rules describe the targets, which
+# is what makes `sweep rules list` show the section, and they stay disabled
 # because walking a snapshot tree to count bytes is expensive and tells the user
 # nothing they can act on.
 

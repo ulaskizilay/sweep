@@ -15,7 +15,8 @@
 #   *.db, *.sqlite*, *.json (configuration), *.toml, *.yaml, Documents/,
 #   projects/, *.key, *.pem
 #
-# The mechanism and the per-application rules arrive in M3.
+# Without that mechanism the section reports instead of guessing, which is what
+# every rule below does.
 
 [meta]
 name = "local-data"

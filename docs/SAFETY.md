@@ -519,8 +519,8 @@ The cost is bounded: the archive is re-downloadable from a mirror, and the
 installed package itself is untouched, because the database lives in
 `/var/lib/pacman` and `/var/lib` is a protected root. `keep_days` is the second
 floor, so a version fetched recently survives whatever the count says. Making
-this exact needs the package database, which is the `pkg:` requirement the
-loader refuses until M5.
+this exact needs the package database, which the rule engine does not read, so
+the `pkg:` requirement is refused at load rather than accepted and ignored.
 
 ### R11. A build artifact may contain a link the user meant to keep
 

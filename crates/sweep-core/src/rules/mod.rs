@@ -216,8 +216,8 @@ impl Kind {
         }
     }
 
-    /// `Err(Some(note))` for a kind that is recognised but not implemented yet,
-    /// so the message can say when it arrives instead of "unknown kind".
+    /// `Err(Some(note))` for a kind that is recognised but not implemented, so
+    /// the message can name the supported alternative instead of "unknown kind".
     pub fn parse(name: &str) -> Result<Self, Option<&'static str>> {
         Ok(match name {
             "dir-sweep" => Kind::DirSweep,
@@ -230,7 +230,9 @@ impl Kind {
             "report-only" => Kind::ReportOnly,
             "if-missing-owner" => {
                 return Err(Some(
-                    "kind \"if-missing-owner\" needs the package database and arrives in M5",
+                    "kind \"if-missing-owner\" is not supported: the rule engine does not read \
+                     the package database; use kind = \"report-only\" and confirm the owner \
+                     yourself",
                 ))
             }
             _ => return Err(None),
@@ -317,7 +319,8 @@ impl Requirement {
                 Ok(Requirement::Dir(template))
             }
             "pkg" => Err(
-                "requirement pkg: needs the package database and arrives in M5; use bin: or dir:"
+                "the pkg: prefix is not supported: the rule engine does not read the package \
+                 database; use bin: or dir:"
                     .to_string(),
             ),
             other => Err(format!(
@@ -630,9 +633,11 @@ mod tests {
     }
 
     #[test]
-    fn if_missing_owner_says_when_it_arrives() {
+    fn if_missing_owner_names_the_alternative() {
         let error = Kind::parse("if-missing-owner").unwrap_err();
-        assert!(error.expect("note").contains("M5"));
+        let note = error.expect("note");
+        assert!(note.contains("not supported"), "{note}");
+        assert!(note.contains("report-only"), "{note}");
         assert!(Kind::parse("dir_sweep").unwrap_err().is_none());
     }
 
@@ -648,7 +653,9 @@ mod tests {
         ));
         assert!(Requirement::parse("cargo").is_err());
         assert!(Requirement::parse("bin:/usr/bin/cargo").is_err());
-        assert!(Requirement::parse("pkg:pacman").unwrap_err().contains("M5"));
+        let error = Requirement::parse("pkg:pacman").unwrap_err();
+        assert!(error.contains("not supported"), "{error}");
+        assert!(error.contains("bin: or dir:"), "{error}");
     }
 
     #[test]

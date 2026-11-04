@@ -12,9 +12,9 @@
 #   Local Storage/, IndexedDB/, Session Storage/, History, Bookmarks,
 #   "Login Data", "Web Data", Sessions/
 #
-# Profile discovery is not needed for the cache trees, but it is needed for
-# Flatpak (`~/.var/app/<id>/cache`) and for a per-profile breakdown. Both arrive
-# with the discovery mechanism in M3.
+# Profile discovery is not needed for the cache trees, but it would be needed for
+# Flatpak (`~/.var/app/<id>/cache`) and for a per-profile breakdown. Neither is
+# covered: a rule root is a fixed template, not a glob.
 
 [meta]
 name = "browsers"

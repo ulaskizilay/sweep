@@ -1,9 +1,9 @@
 # Orphaned application data.
 #
-# The rule kind this section needs is `if-missing-owner`, and it is refused at
-# load with "arrives in M5" rather than silently ignored, because an orphan sweep
-# is the most dangerous rule in the catalog: its whole premise is deleting a
-# directory whose owner it could not find.
+# The rule kind this section needs is `if-missing-owner`, and the loader refuses
+# it rather than silently ignoring it, because an orphan sweep is the most
+# dangerous rule in the catalog: its whole premise is deleting a directory whose
+# owner it could not find.
 #
 # A directory may be deleted only with one of three pieces of evidence:
 #
@@ -22,7 +22,7 @@
 
 [meta]
 name = "orphans"
-description = "Application data whose owner is not installed; evidence-gated, lands in M5"
+description = "Application data whose owner is not installed; evidence-gated, reported only"
 
 [[rule]]
 id = "orphan.config.report"

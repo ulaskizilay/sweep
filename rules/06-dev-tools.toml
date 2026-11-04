@@ -18,10 +18,10 @@
 # their own commands and their state is not a cache directory tree. They are
 # reported in the virtualization section, not swept here.
 #
-# Where a tool has its own cache command (`cargo cache`, `go clean -cache`,
-# `npm cache verify`), M3 will try the command first and fall back to the path,
-# recording `via=tool` or `via=path`. M2 is read-only, so the path is all there
-# is.
+# Every rule here deletes the path itself; sweep does not run a tool's own cache
+# command (`go clean -cache`, `npm cache verify`). The roots below hold nothing
+# but regenerable cache, so removing the directory is what the tool's command
+# would have done, and no extra subprocess sits in the apply path.
 
 [meta]
 name = "dev-tools"

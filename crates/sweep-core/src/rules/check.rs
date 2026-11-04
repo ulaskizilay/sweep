@@ -438,10 +438,11 @@ pub fn compile(raw: RawRule, pack: &str, xdg: &Xdg) -> Result<Rule, RuleError> {
         ));
     }
 
-    // A `root` rule outside `system` would need the privilege boundary that
-    // arrives in M4 to delete anything, so it is refused. Report-only is exempt:
-    // it never contributes a plan item, and a root-owned tree such as
-    // `/var/lib/docker` or `/.snapshots` cannot even be read without it.
+    // A `root` rule outside `system` is refused: only the system section has a
+    // privileged plan-and-apply path, so a root rule anywhere else could never
+    // delete anything. Report-only is exempt, because it never contributes a
+    // plan item, and a root-owned tree such as `/var/lib/docker` or
+    // `/.snapshots` cannot even be read without it.
     if privilege == Privilege::Root && section != Section::System && kind.deletes() {
         return Err(fail(
             RuleErrorKind::RootPrivilege,
@@ -822,11 +823,12 @@ privilege = "root"
     }
 
     #[test]
-    fn if_missing_owner_is_refused_with_a_date() {
+    fn if_missing_owner_is_refused_with_an_alternative() {
         let body = base("dev.bad").replace("dir-age", "if-missing-owner");
         let error = first_error(one(&body));
         assert_eq!(error.kind, RuleErrorKind::UnsupportedKind);
-        assert!(error.message.contains("M5"), "{}", error.message);
+        assert!(error.message.contains("not supported"), "{}", error.message);
+        assert!(error.message.contains("report-only"), "{}", error.message);
     }
 
     #[test]

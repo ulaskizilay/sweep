@@ -14,9 +14,9 @@
 # it. That is why each rule names one directory rather than its parent.
 #
 # The catalog lists the applications that appear on Arch desktops. Adding one is
-# one rule per cache directory; a section for each application arrives with the
-# profile discovery in M3, which is also what covers Flatpak's
-# `~/.var/app/<id>/cache` layout.
+# one rule per cache directory. Flatpak's `~/.var/app/<id>/cache` layout and a
+# per-application section are not covered: both need discovery, and a rule root
+# is a fixed template rather than a glob.
 
 [meta]
 name = "app-caches"

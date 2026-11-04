@@ -132,8 +132,10 @@ A retention the kind cannot read is a load error (`ignored_keep_days`), not a
 number printed by `rules list` that the run silently disobeys.
 
 `if-missing-owner` and the `pkg:` requirement prefix are recognised as valid
-spellings but refused at load: they need the package database and arrive in M5.
-Refusing them beats accepting a rule that quietly does nothing.
+spellings but refused at load: the rule engine does not read the package
+database, so it cannot tell whether an owner is installed. Refusing them beats
+accepting a rule that quietly does nothing. `if-missing-owner` names
+`report-only` as the supported alternative, and `pkg:` names `bin:` and `dir:`.
 
 ### The `hf-cache` rule, precisely
 
