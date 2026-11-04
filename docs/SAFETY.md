@@ -163,6 +163,22 @@ The scanner is responsible for emitting children before parents (post-order).
 That ordering is a scanner test, not a funnel guarantee — the funnel's job is to
 make a wrong order harmless.
 
+### A pair is ordered by the sink, not by the sort
+
+Emptying the trash removes two files per entry: the payload and the
+`.trashinfo` record that names it. The record must follow the payload, and
+`Plan::finish` sorting deepest-first is not enough to promise that — a shallow
+payload ties with its record on depth, and a refused payload would still take the
+record with it.
+
+So a record carries the payload it depends on (`PlanItem::after`), and the sink
+keeps a set of the paths it removed or would remove in this run. A record whose
+payload is not in that set is skipped with `payload_remains`. A preview settles
+the same set with `WouldRemove`, which is what keeps dry run and apply in
+agreement. Pinned by `a_trash_record_is_removed_after_its_payload`,
+`a_record_whose_payload_was_not_removed_is_kept` and
+`a_preview_settles_a_pair_the_same_way_the_apply_does`.
+
 ---
 
 ## 7. Directory handles never follow symlinks

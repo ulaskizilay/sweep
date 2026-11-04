@@ -732,6 +732,100 @@ fn clean_without_yes_on_a_pipe_declines_and_writes_nothing() {
 }
 
 #[test]
+fn clean_empties_the_trash_as_pairs_and_leaves_unpaired_payloads() {
+    let home = home();
+    write(
+        home.path(),
+        ".local/share/Trash/files/project/inner.txt",
+        "body",
+    );
+    write(
+        home.path(),
+        ".local/share/Trash/info/project.trashinfo",
+        "[Trash Info]\nPath=/tmp/project\nDeletionDate=2026-01-01T00:00:00\n",
+    );
+    // A payload with no record is not an entry: the desktop cannot see it either,
+    // and removing it would be an unrecoverable delete sweep cannot describe.
+    write(
+        home.path(),
+        ".local/share/Trash/files/unpaired.txt",
+        "no record",
+    );
+
+    let output = run_in(
+        home.path(),
+        &["clean", "--yes", "--only", "user-essentials"],
+    );
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+
+    let trash = home.path().join(".local/share/Trash");
+    assert!(
+        !trash.join("files/project").exists(),
+        "the payload must be gone"
+    );
+    assert!(
+        !trash.join("info/project.trashinfo").exists(),
+        "the record must follow the payload"
+    );
+    assert!(
+        trash.join("files/unpaired.txt").exists(),
+        "an unpaired payload stays"
+    );
+    assert!(trash.join("files").exists(), "the trash itself stays");
+    assert!(trash.join("info").exists());
+
+    let rows = log_rows(home.path());
+    let removed: BTreeSet<PathBuf> = rows
+        .iter()
+        .filter(|row| row["action"] == "REMOVED")
+        .map(|row| PathBuf::from(row["path"].as_str().expect("path")))
+        .collect();
+    assert_eq!(
+        removed,
+        BTreeSet::from([
+            trash.join("files/project/inner.txt"),
+            trash.join("files/project"),
+            trash.join("info/project.trashinfo"),
+        ]),
+        "the ledger must name the child, the payload and the record"
+    );
+}
+
+#[test]
+fn clean_dry_run_counts_the_trash_and_removes_nothing() {
+    let home = home();
+    write(home.path(), ".local/share/Trash/files/notes.txt", "body");
+    write(
+        home.path(),
+        ".local/share/Trash/info/notes.txt.trashinfo",
+        "[Trash Info]\nPath=/tmp/notes.txt\nDeletionDate=2026-01-01T00:00:00\n",
+    );
+
+    let before = snapshot(home.path());
+    let output = run_in(
+        home.path(),
+        &["clean", "--dry-run", "--json", "--only", "user-essentials"],
+    );
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    assert_eq!(
+        snapshot(home.path()),
+        before,
+        "a preview may not touch the trash"
+    );
+
+    let report: serde_json::Value =
+        serde_json::from_str(&output.stdout).expect("one JSON document");
+    let row = report["rules"]
+        .as_array()
+        .expect("rules")
+        .iter()
+        .find(|row| row["id"] == "user.trash")
+        .expect("the trash rule is part of the preview");
+    assert_eq!(row["items"], 2, "payload and record are two items: {row}");
+    assert_eq!(row["status"], "planned", "{row}");
+}
+
+#[test]
 fn clean_yes_removes_only_planned_paths_and_logs_them() {
     let home = home();
     let blob = firefox_cache(home.path());

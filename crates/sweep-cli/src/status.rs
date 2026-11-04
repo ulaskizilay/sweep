@@ -323,10 +323,9 @@ fn trash_finding(xdg: &Xdg, limits: &Limits, probe: &dyn FsProbe) -> Finding {
             label: "trash",
             state: State::Info,
             value: format!("{} in {} items", human_bytes(bytes), human_count(files)),
-            // Trash is report-only in this version: the paired `files/` +
-            // `info/` removal is not implemented, so naming a sweep command
-            // here would be a promise the tool does not keep.
-            next: None,
+            // Emptying the trash is part of `clean`, which removes each payload
+            // together with the `.trashinfo` record that names it.
+            next: Some("sweep clean --only user-essentials".to_string()),
             unavailable: None,
         },
         None => Finding {

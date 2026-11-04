@@ -40,16 +40,19 @@ recoverable = true
 keep_days = 30
 privilege = "user"
 
-# Trash is report-only until file and `.trashinfo` records can be removed as a
-# pair. Deleting `files/` alone leaves a restore dialog full of entries whose
-# payload is gone.
+# Trash is the one target that is already deleted by intent: the user removed
+# the file, and the trash is holding it. Emptying it therefore removes two files
+# per entry, the payload and the `.trashinfo` record that names it, and in that
+# order. `trash-empty` owns that pairing; a record whose payload survived is
+# refused at the sink rather than removed.
 [[rule]]
-id = "user.trash.report"
+id = "user.trash"
 section = "user-essentials"
-kind = "report-only"
-root = "{data}/Trash/files"
-evidence = "Reported, never deleted: sweep moves entries into the trash and never empties it; that stays the file manager's call."
-keep_days = 30
+kind = "trash-empty"
+root = "{data}/Trash"
+evidence = "A file is in the trash because the user already deleted it; emptying removes each payload and its restore record as a pair, so no restore entry outlives the file it names."
+recoverable = false
+keep_days = 0
 privilege = "user"
 
 [[rule]]

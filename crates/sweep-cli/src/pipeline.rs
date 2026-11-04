@@ -47,6 +47,7 @@ use sweep_core::probe::RealProbe;
 use sweep_core::project;
 use sweep_core::rules::{Kind, Privilege, Rule, RuleSet, Section};
 use sweep_core::scan::{self, BlockKind, Collect, Entry, Limits, Select, Spec, Stop};
+use sweep_core::trash;
 use sweep_core::validate::{AllowedRoot, Policy, ValidateCtx};
 use sweep_core::{funnel, Mode, Plan, Xdg};
 
@@ -1173,6 +1174,9 @@ fn execute(
     if rule.kind == Kind::ProjectArtifacts {
         return execute_project(rule, root, probe, ctx, limits, plan, now);
     }
+    if rule.kind == Kind::TrashEmpty {
+        return execute_trash(rule, root, probe, ctx, limits, plan);
+    }
 
     // Roots another enabled rule owns: the residual cache sweep must not take a
     // target that has a retention policy of its own.
@@ -1258,7 +1262,7 @@ fn execute(
             paths
         }
         Kind::DirAge => age_candidates(rule, &collected, root, now, &mut run),
-        Kind::HfCache | Kind::PkgCache | Kind::ProjectArtifacts => {
+        Kind::HfCache | Kind::PkgCache | Kind::ProjectArtifacts | Kind::TrashEmpty => {
             unreachable!("handled before the walk")
         }
     };
@@ -1545,6 +1549,81 @@ fn execute_hf(
 /// Selective deletion inside this root is why the child re-derives the selection
 /// (`sweep_core::selection`): the elevated process must reach the same verdict
 /// per path, not trust the list the parent sent.
+fn execute_trash(
+    rule: &Rule,
+    root: &Path,
+    probe: &RealProbe,
+    ctx: &ValidateCtx<'_>,
+    limits: &Limits,
+    plan: &mut Plan,
+) -> RuleRun {
+    let found = trash::scan(root, limits, probe);
+    let mut run = base_run(rule, Status::Planned, None);
+
+    if found.missing_root {
+        run.status = Status::NotPresent;
+        return run;
+    }
+    if found.not_a_directory {
+        run.status = Status::NotADirectory;
+        run.detail = Some(
+            "the trash does not hold both files/ and info/, so no entry can be removed as a pair"
+                .to_string(),
+        );
+        return run;
+    }
+    if found.root_unreadable {
+        run.status = Status::Unreadable;
+        return run;
+    }
+    if found.stop != Stop::Complete {
+        run.status = Status::ScanIncomplete;
+        run.detail = Some(match found.stop {
+            Stop::EntryBudget => "entry budget exhausted".to_string(),
+            Stop::TimeBudget => "time budget exhausted".to_string(),
+            Stop::Complete => unreachable!("checked above"),
+        });
+        return run;
+    }
+
+    run.scanned_bytes = found.entries.iter().map(|entry| entry.bytes).sum();
+    for entry in &found.entries {
+        // The payload goes in first so its record is planned against a path the
+        // plan already knows. The funnel still decides at apply time: a record
+        // whose payload survived is refused, not removed.
+        for path in &entry.paths {
+            match plan.push(path, &rule.id, ctx) {
+                Ok(_) => run.items += 1,
+                Err(_) => run.refused += 1,
+            }
+        }
+        plan.pair(&entry.record, &entry.payload);
+        match plan.push(&entry.record, &rule.id, ctx) {
+            Ok(_) => run.items += 1,
+            Err(_) => run.refused += 1,
+        }
+    }
+
+    if found.skipped > 0 {
+        run.detail = Some(format!(
+            "{} entries left alone: a payload without a restore record, or one whose tree could \
+             not be read completely",
+            found.skipped
+        ));
+    }
+
+    run.bytes = plan
+        .items()
+        .iter()
+        .filter(|item| item.rule() == &rule.id)
+        .map(|item| item.bytes())
+        .sum();
+    if run.items == 0 && run.refused == 0 {
+        run.status = Status::Empty;
+    }
+    run
+}
+
 fn execute_pkg(
     rule: &Rule,
     root: &Path,

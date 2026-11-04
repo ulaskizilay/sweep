@@ -123,6 +123,7 @@ the file. `..` is refused for the same reason.
 | `dir-age` | each top-level entry whose whole subtree is older than `keep_days` | applied |
 | `file-pattern` | files below the root whose relative path matches `pattern` and are older than `keep_days` | applied |
 | `tool-cache` | every entry below the root, **and then the root** | must be 0: everything goes |
+| `trash-empty` | each trashed payload and the `.trashinfo` record that names it, in that order | must be 0: the whole trash goes |
 | `hf-cache` | blobs no `snapshots/` link resolves to, plus abandoned `*.incomplete` downloads | must be > 0 |
 | `pkg-cache` | every package version outside the newest `keep_versions`, and its detached `.sig` | `keep_versions` required; `keep_days` is a recency floor |
 | `project-artifacts` | build directories inside project roots, found by the manifest beside them, plus symbolic links inside them | applied; must be > 0 on a `{home}` root |
@@ -226,7 +227,7 @@ Every check below applies to the built-in packs and to the overlay equally.
 | `protected_root` | a deleting rule resolves inside the compile-time protected list (`/usr`, `/etc`, `/var/lib`, …) |
 | `bare_root` | a deleting rule resolves to a base directory, to `/`, or to a kernel pseudo-filesystem |
 | `missing_evidence` | a deleting rule has no `evidence` line |
-| `zero_keep_days` | `keep_days = 0` without `recoverable = true` |
+| `zero_keep_days` | `keep_days = 0` without `recoverable = true` (`trash-empty` is exempt: its target is user data by definition) |
 | `unsafe_retention` | `kind = "hf-cache"` with `keep_days = 0` (a blob with no snapshot link may be a download that has not finished), or `kind = "project-artifacts"` rooted at `{home}` with `keep_days = 0` (every build directory below `$HOME` is a project someone may be in right now) |
 | `root_privilege` | `privilege = "root"` on a deleting rule outside the `system` section |
 | `missing_pattern` | `kind = "file-pattern"` with no `pattern` |
@@ -236,6 +237,7 @@ Every check below applies to the built-in packs and to the overlay equally.
 | `unused_keep_versions` | `keep_versions` on a kind that does not read it |
 | `bad_keep_versions` | `keep_versions = 0`, which would leave no version of anything in the cache |
 | `ignored_keep_days` | `dir-sweep` or `tool-cache` declares `keep_days > 0`, which that kind never reads |
+| `trash_layout` | `kind = "trash-empty"` with a root other than `{data}/Trash`, a non-zero `keep_days`, a `max_depth`, a `pattern`, an `exclude`, or `privilege = "root"` |
 | `requirement` | a `requires` entry is not `bin:<name>` or `dir:<path>` |
 | `bad_depth` | `max_depth` is 0 or greater than 32 |
 
@@ -395,7 +397,9 @@ reports `permission denied`.
 2. Prefer `dir-age` over `dir-sweep` when the tool tolerates stale data. A
    retention of 0 means "delete what is not open right now", and that claim
    needs `recoverable = true`. `dir-sweep` and `tool-cache` cannot carry a
-   retention at all; if you want a window, that is `dir-age`.
+   retention at all; if you want a window, that is `dir-age`. `trash-empty` is
+   the one exception: the file is in the trash because the user already deleted
+   it, so it declares `recoverable = false` and still empties immediately.
 3. Add a test that proves **what it does not delete** — a fresh file, a
    symlink, an excluded directory, a claimed root. The negative space is the
    part that matters.

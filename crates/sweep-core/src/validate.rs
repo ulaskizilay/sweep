@@ -162,6 +162,9 @@ pub enum Reason {
     /// within the keep count. Reached only by the elevated child, which
     /// re-derives the selection instead of trusting the request.
     NotSelected,
+    /// A paired item whose payload is still there: the `.trashinfo` record of an
+    /// entry the run did not manage to remove.
+    PayloadRemains,
 }
 
 impl Reason {
@@ -194,6 +197,7 @@ impl Reason {
             Reason::ProbeUnknown(_) => "probe_unknown",
             Reason::AlreadyGone => "already_gone",
             Reason::NotSelected => "not_selected",
+            Reason::PayloadRemains => "payload_remains",
         }
     }
 
@@ -238,6 +242,9 @@ impl std::fmt::Display for Reason {
             Reason::AlreadyGone => f.write_str("path was already removed"),
             Reason::NotSelected => {
                 f.write_str("path is not one the rule selects in its current state")
+            }
+            Reason::PayloadRemains => {
+                f.write_str("its payload is still in the trash, so the restore record was kept")
             }
         }
     }

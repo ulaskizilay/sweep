@@ -43,6 +43,7 @@ pub mod rules;
 pub mod scan;
 pub mod selection;
 pub mod sys;
+pub mod trash;
 pub mod validate;
 pub mod version;
 

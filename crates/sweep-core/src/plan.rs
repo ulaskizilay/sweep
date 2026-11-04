@@ -9,7 +9,7 @@
 //! stable hash, so `--dry-run` and the real run produce the same identity and a
 //! test can assert they agree.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::meta::Meta;
@@ -91,6 +91,13 @@ pub struct PlanItem {
     /// target, and an item that was *not* a link must be refused if it became
     /// one while the user was reading the plan.
     is_symlink: bool,
+    /// Remove this item only if that path was removed (or would be, in a
+    /// preview) earlier in the same run.
+    ///
+    /// A trash entry is two files: the payload and the `.trashinfo` record that
+    /// names it. The record is worthless once the payload is gone and misleading
+    /// while it is not, so the pair is ordered rather than independent.
+    after: Option<PathBuf>,
 }
 
 impl PlanItem {
@@ -125,6 +132,12 @@ impl PlanItem {
     pub fn is_symlink(&self) -> bool {
         self.is_symlink
     }
+
+    /// The path that must be removed first, for an item that is one half of a
+    /// pair.
+    pub fn after(&self) -> Option<&Path> {
+        self.after.as_deref()
+    }
 }
 
 /// A refusal worth reporting: the user asked for it, policy said no.
@@ -140,12 +153,24 @@ pub struct Plan {
     items: Vec<PlanItem>,
     denied: Vec<DeniedItem>,
     seen: BTreeSet<PathBuf>,
+    /// `.trashinfo` records and the payload each one depends on, keyed by the
+    /// literal record path the planner pushes.
+    pairs: BTreeMap<PathBuf, PathBuf>,
     hash: String,
 }
 
 impl Plan {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Records that `record` may only be removed once `payload` is gone.
+    ///
+    /// Both paths are literal: they are looked up by the literal the planner
+    /// pushes, before validation resolves symlinked ancestors.
+    pub fn pair(&mut self, record: &Path, payload: &Path) {
+        self.pairs
+            .insert(record.to_path_buf(), payload.to_path_buf());
     }
 
     /// Validates `literal` and, when allowed, records it.
@@ -191,6 +216,9 @@ impl Plan {
         if !self.seen.insert(physical.clone()) {
             return;
         }
+        // A paired record (a `.trashinfo` file) is ordered after its payload. The
+        // lookup is by literal path because that is what the planner pushed.
+        let after = self.pairs.get(literal).cloned();
         self.items.push(PlanItem {
             physical,
             literal: literal.to_path_buf(),
@@ -200,6 +228,7 @@ impl Plan {
             ino: meta.ino,
             is_dir: meta.is_dir(),
             is_symlink: meta.is_symlink(),
+            after,
         });
     }
 

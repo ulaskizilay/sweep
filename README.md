@@ -381,10 +381,10 @@ it could not be measured; the default keeps the screen quiet.
 The actionable rows name the command that acts on them (`sweep clean --only
 system` for a package cache, `sudo pacman -Rns $(pacman -Qtdq)` for orphans),
 because a health summary that cannot be acted on is a dashboard. Trash appears
-with its size and no command: `analyze` and `uninstall` put things there and
-sweep does not empty it, so a command in that row would be a promise the tool
-does not keep. The way out is the one you already have -- the desktop's
-"Restore", or emptying the trash in a file manager.
+with its size, and `clean` empties it as part of the same plan: each payload goes
+with the `.trashinfo` record that names it, so nothing is left offering a restore
+that cannot work. `analyze` and `uninstall` are what put entries there in the
+first place, which is what keeps that step reviewable.
 
 `--json` prints the same facts with stable field names, one document, for a
 script that should not parse the prose. The last-run row sums the newest session

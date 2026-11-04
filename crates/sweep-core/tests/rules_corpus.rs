@@ -156,6 +156,12 @@ fn ids_are_unique_and_namespaced() {
 #[test]
 fn an_unbounded_retention_is_declared_recoverable() {
     for rule in catalog().rules() {
+        // Emptying the trash is the one deletion whose target is user data by
+        // definition: the file is there because the user already deleted it.
+        // Calling that "regenerable" would be a lie in the JSON report.
+        if rule.kind == Kind::TrashEmpty {
+            continue;
+        }
         if rule.kind.deletes() && rule.keep_days == 0 {
             assert!(
                 rule.recoverable,
@@ -288,7 +294,7 @@ fn the_catalog_digest_is_unchanged() {
 
     // Update this value in the same commit as the rule change, so the review
     // diff shows the catalog moved on purpose.
-    const EXPECTED: u64 = 0x4626_5b82_4ea1_8ec5;
+    const EXPECTED: u64 = 0xc561_5309_977f_3a63;
     assert_eq!(
         format!("{hash:016x}"),
         format!("{EXPECTED:016x}"),

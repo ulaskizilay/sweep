@@ -36,6 +36,9 @@ use crate::Xdg;
 #[derive(Debug, Clone, Default)]
 pub struct Selection {
     paths: std::collections::BTreeSet<PathBuf>,
+    /// `.trashinfo` records, each mapped to the payload it names. A record may
+    /// only be removed after its payload is gone, which the funnel enforces.
+    paired: BTreeMap<PathBuf, PathBuf>,
     /// False when the selection could not be derived completely. `paths` is then
     /// empty, and every lookup refuses: partial knowledge of a cache cannot
     /// order versions or ages.
@@ -71,6 +74,7 @@ impl Selection {
                         .into_iter()
                         .map(|found| found.path)
                         .collect(),
+                    paired: BTreeMap::new(),
                     complete: true,
                 }
             }
@@ -90,17 +94,45 @@ impl Selection {
                         .into_iter()
                         .map(|found| found.path)
                         .collect(),
+                    paired: BTreeMap::new(),
                     complete: true,
                 }
             }
             Kind::DirSweep | Kind::DirAge | Kind::FilePattern | Kind::ToolCache => {
                 Self::from_walk(rule, &root, now, limits, probe)
             }
+            // The trash is not a tree with one root: it is a list of entries, each
+            // with a payload and a restore record. The pair is what makes the
+            // deletion safe, so the selection carries both halves.
+            Kind::TrashEmpty => {
+                let found = crate::trash::scan(&root, limits, probe);
+                if found.stop != Stop::Complete
+                    || found.missing_root
+                    || found.not_a_directory
+                    || found.root_unreadable
+                {
+                    return Self::default();
+                }
+                let mut paths = std::collections::BTreeSet::new();
+                let mut paired = BTreeMap::new();
+                for entry in found.entries {
+                    for path in entry.paths {
+                        paths.insert(path);
+                    }
+                    paired.insert(entry.record, entry.payload);
+                }
+                Self {
+                    paths,
+                    paired,
+                    complete: true,
+                }
+            }
             // Nothing to select is a complete answer for a rule that deletes
             // nothing, but an empty set is also what an unknown walk returns, so
             // say "complete" explicitly and let the empty set do the refusing.
             Kind::ReportOnly => Self {
                 paths: Default::default(),
+                paired: BTreeMap::new(),
                 complete: true,
             },
             // A project sweep never crosses the privilege boundary: a build
@@ -135,6 +167,7 @@ impl Selection {
                     .iter()
                     .map(|entry| entry.path.clone())
                     .collect(),
+                paired: BTreeMap::new(),
                 complete: true,
             },
             Kind::ToolCache => {
@@ -146,6 +179,7 @@ impl Selection {
                 paths.insert(root.to_path_buf());
                 Self {
                     paths,
+                    paired: BTreeMap::new(),
                     complete: true,
                 }
             }
@@ -156,22 +190,34 @@ impl Selection {
                     .filter(|entry| !entry.is_dir && entry.mtime < cutoff)
                     .map(|entry| entry.path.clone())
                     .collect(),
+                paired: BTreeMap::new(),
                 complete: true,
             },
             Kind::DirAge => Self {
                 paths: aged_paths(&collected, root, cutoff),
+                paired: BTreeMap::new(),
                 complete: true,
             },
             // Handled by the scanners, or never reached by this process.
-            Kind::PkgCache | Kind::HfCache | Kind::ProjectArtifacts | Kind::ReportOnly => {
-                Self::default()
-            }
+            Kind::PkgCache
+            | Kind::HfCache
+            | Kind::ProjectArtifacts
+            | Kind::TrashEmpty
+            | Kind::ReportOnly => Self::default(),
         }
     }
 
     /// True when the rule would plan `path` in its current state.
     pub fn admits(&self, path: &Path) -> bool {
         self.complete && self.paths.contains(path)
+    }
+
+    /// The payload a `.trashinfo` record depends on, when the selection paired it.
+    ///
+    /// The planner marks the record with this path so the funnel can refuse to
+    /// remove a record whose payload survived.
+    pub fn payload_for(&self, record: &Path) -> Option<&Path> {
+        self.paired.get(record).map(PathBuf::as_path)
     }
 
     pub fn complete(&self) -> bool {

@@ -119,9 +119,20 @@ pub fn apply(
     mut oplog: Option<&mut Oplog>,
 ) -> Report {
     let mut report = Report::default();
+    // Items a paired item is allowed to follow, by literal path. In a preview
+    // nothing is removed, so a payload the plan *would* remove counts as settled:
+    // dry run and apply must reach the same verdict for the record, or the
+    // preview would promise a deletion the real run refuses.
+    let mut settled: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
 
     for item in plan.items() {
-        let outcome = apply_one(item, probe, mode);
+        let outcome = match item.after() {
+            Some(payload) if !settled.contains(payload) => Outcome::Skipped(Reason::PayloadRemains),
+            _ => apply_one(item, probe, mode),
+        };
+        if outcome.is_removed() || outcome.is_would_remove() {
+            settled.insert(item.literal().to_path_buf());
+        }
         match &outcome {
             Outcome::Removed { bytes } | Outcome::WouldRemove { bytes } => {
                 report.removed_bytes = report.removed_bytes.saturating_add(*bytes);
@@ -340,6 +351,102 @@ mod tests {
 
         let raw = std::fs::read_to_string(log.path()).unwrap();
         assert!(raw.contains("\"action\":\"REMOVED\""));
+        drop(temp);
+    }
+
+    /// A trash entry and its restore record, both below `root`.
+    fn trash_pair(root: &Path) -> (PathBuf, PathBuf) {
+        let payload = root.join("entry");
+        std::fs::create_dir_all(&payload).unwrap();
+        let record = root.join("entry.trashinfo");
+        std::fs::write(&record, b"[Trash Info]\n").unwrap();
+        (payload, record)
+    }
+
+    fn paired_plan(xdg: &Xdg, probe: &RealProbe, root: &Path) -> (Plan, PathBuf, PathBuf) {
+        let (payload, record) = trash_pair(root);
+        let allowed = vec![AllowedRoot::new(root)];
+        let ctx = ValidateCtx {
+            xdg,
+            probe,
+            allowed: &allowed,
+            policy: Policy::default(),
+        };
+        let rule = RuleId::new("user.trash").unwrap();
+        let mut plan = Plan::new();
+        assert!(
+            plan.push(&payload, &rule, &ctx).is_ok(),
+            "{:?}",
+            plan.denied()
+        );
+        plan.pair(&record, &payload);
+        assert!(
+            plan.push(&record, &rule, &ctx).is_ok(),
+            "{:?}",
+            plan.denied()
+        );
+        plan.finish();
+        (plan, payload, record)
+    }
+
+    #[test]
+    fn a_trash_record_is_removed_after_its_payload() {
+        let (temp, xdg, probe) = fixture();
+        let cache = xdg.cache.clone();
+        std::fs::create_dir_all(&cache).unwrap();
+        let (plan, payload, record) = paired_plan(&xdg, &probe, &cache);
+        assert_eq!(plan.len(), 2, "denied: {:?}", plan.denied());
+
+        let report = apply(&plan, &probe, Mode::Apply, "clean", None);
+        assert_eq!(report.removed(), 2);
+        assert!(!payload.exists(), "the payload must be gone");
+        assert!(!record.exists(), "the record must follow it");
+        drop(temp);
+    }
+
+    #[test]
+    fn a_record_whose_payload_was_not_removed_is_kept() {
+        let (temp, xdg, probe) = fixture();
+        let cache = xdg.cache.clone();
+        std::fs::create_dir_all(&cache).unwrap();
+        let (payload, record) = trash_pair(&cache);
+
+        // Only the record is planned. The payload is still there, so removing the
+        // record would leave a file the user can no longer see or restore.
+        let allowed = vec![AllowedRoot::new(&cache)];
+        let ctx = ValidateCtx {
+            xdg: &xdg,
+            probe: &probe,
+            allowed: &allowed,
+            policy: Policy::default(),
+        };
+        let rule = RuleId::new("user.trash").unwrap();
+        let mut plan = Plan::new();
+        plan.pair(&record, &payload);
+        assert!(plan.push(&record, &rule, &ctx).is_ok());
+        plan.finish();
+
+        let report = apply(&plan, &probe, Mode::Apply, "clean", None);
+        assert_eq!(report.removed(), 0);
+        assert_eq!(
+            report.results[0].outcome,
+            Outcome::Skipped(Reason::PayloadRemains)
+        );
+        assert!(record.exists());
+        assert!(payload.exists());
+        drop(temp);
+    }
+
+    #[test]
+    fn a_preview_settles_a_pair_the_same_way_the_apply_does() {
+        let (temp, xdg, probe) = fixture();
+        let cache = xdg.cache.clone();
+        std::fs::create_dir_all(&cache).unwrap();
+        let (plan, _payload, record) = paired_plan(&xdg, &probe, &cache);
+
+        let report = apply(&plan, &probe, Mode::DryRun, "clean", None);
+        assert_eq!(report.would_remove(), 2, "the record is part of the plan");
+        assert!(record.exists(), "a preview must not delete");
         drop(temp);
     }
 

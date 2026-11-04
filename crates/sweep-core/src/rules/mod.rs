@@ -178,6 +178,10 @@ pub enum Kind {
     FilePattern,
     /// Remove every entry below the root, then the root itself.
     ToolCache,
+    /// Empty the freedesktop trash: each entry's payload, then the
+    /// `.trashinfo` record that names it, so no restore entry outlives the file
+    /// it points at.
+    TrashEmpty,
     /// Remove what a Hugging Face hub cache has left behind: blobs no snapshot
     /// links to, and abandoned `*.incomplete` downloads.
     HfCache,
@@ -192,11 +196,12 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 8] = [
+    pub const ALL: [Kind; 9] = [
         Kind::DirSweep,
         Kind::DirAge,
         Kind::FilePattern,
         Kind::ToolCache,
+        Kind::TrashEmpty,
         Kind::HfCache,
         Kind::PkgCache,
         Kind::ProjectArtifacts,
@@ -209,6 +214,7 @@ impl Kind {
             Kind::DirAge => "dir-age",
             Kind::FilePattern => "file-pattern",
             Kind::ToolCache => "tool-cache",
+            Kind::TrashEmpty => "trash-empty",
             Kind::HfCache => "hf-cache",
             Kind::PkgCache => "pkg-cache",
             Kind::ProjectArtifacts => "project-artifacts",
@@ -224,6 +230,7 @@ impl Kind {
             "dir-age" => Kind::DirAge,
             "file-pattern" => Kind::FilePattern,
             "tool-cache" => Kind::ToolCache,
+            "trash-empty" => Kind::TrashEmpty,
             "hf-cache" => Kind::HfCache,
             "pkg-cache" => Kind::PkgCache,
             "project-artifacts" => Kind::ProjectArtifacts,

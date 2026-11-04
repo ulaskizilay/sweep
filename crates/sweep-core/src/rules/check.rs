@@ -56,6 +56,7 @@ pub enum RuleErrorKind {
     IgnoredKeepDays,
     Requirement,
     BadDepth,
+    TrashLayout,
 }
 
 impl RuleErrorKind {
@@ -86,6 +87,7 @@ impl RuleErrorKind {
             RuleErrorKind::IgnoredKeepDays => "ignored_keep_days",
             RuleErrorKind::Requirement => "requirement",
             RuleErrorKind::BadDepth => "bad_depth",
+            RuleErrorKind::TrashLayout => "trash_layout",
         }
     }
 }
@@ -412,7 +414,11 @@ pub fn compile(raw: RawRule, pack: &str, xdg: &Xdg) -> Result<Rule, RuleError> {
         ));
     }
 
-    if keep_days == 0 && !recoverable {
+    // Emptying the trash is the one deletion whose target is user data by
+    // definition, so it is not declared regenerable and the zero-retention check
+    // does not apply. It still passes the open-file and mount checks at plan
+    // time, and the user confirms the whole trash in the preview.
+    if keep_days == 0 && !recoverable && kind != Kind::TrashEmpty {
         return Err(fail(
             RuleErrorKind::ZeroKeepDays,
             pack,
@@ -420,6 +426,52 @@ pub fn compile(raw: RawRule, pack: &str, xdg: &Xdg) -> Result<Rule, RuleError> {
             "keep_days = 0 deletes anything not currently open; set recoverable = true to say so"
                 .to_string(),
         ));
+    }
+
+    // `trash-empty` reads one fixed layout: `{data}/Trash/files` paired with
+    // `{data}/Trash/info`. Any other root, a retention, a depth bound or a
+    // pattern would describe work the kind does not do, and a rule that states
+    // one thing while doing another is worse than a refusal.
+    if kind == Kind::TrashEmpty {
+        if template.raw() != "{data}/Trash" {
+            return Err(fail(
+                RuleErrorKind::TrashLayout,
+                pack,
+                Some(&label),
+                format!(
+                    "kind = \"trash-empty\" reads \"{{data}}/Trash\" and nothing else, not {root:?}"
+                ),
+            ));
+        }
+        if keep_days > 0 {
+            return Err(fail(
+                RuleErrorKind::TrashLayout,
+                pack,
+                Some(&label),
+                "kind = \"trash-empty\" empties the whole trash, so keep_days would be reported \
+                 but never applied; set keep_days = 0"
+                    .to_string(),
+            ));
+        }
+        if max_depth.is_some() || !patterns.is_empty() || !exclude.is_empty() {
+            return Err(fail(
+                RuleErrorKind::TrashLayout,
+                pack,
+                Some(&label),
+                "kind = \"trash-empty\" takes no max_depth, pattern or exclude: it empties every \
+                 paired entry in the trash"
+                    .to_string(),
+            ));
+        }
+        if privilege != Privilege::User {
+            return Err(fail(
+                RuleErrorKind::TrashLayout,
+                pack,
+                Some(&label),
+                "kind = \"trash-empty\" is user-owned: another user's trash is not yours to empty"
+                    .to_string(),
+            ));
+        }
     }
 
     // A declared retention that the engine never reads is worse than no
