@@ -17,6 +17,21 @@
 # one rule per cache directory. Flatpak's `~/.var/app/<id>/cache` layout and a
 # per-application section are not covered: both need discovery, and a rule root
 # is a fixed template rather than a glob.
+#
+# Agent CLIs keep their state in a home dot-directory rather than an application
+# config directory, so their rules sit here too. Only the `cache` children are
+# rules. In those same directories:
+#
+#   sessions, projects, chats, conversations   conversation transcripts
+#   worktrees                                  checkouts a session is editing
+#   packages                                   downloaded release binaries
+#   plugins/cache                              *installed* plugins
+#   file-history, backups                      the undo history behind an edit
+#   *.sqlite, *.db, *.jsonl                    live databases and history
+#
+# None of them is regenerable, and several are the only copy of work that was
+# never committed. `plugins/cache` is the sharpest example: it is named "cache"
+# and holds installed plugins, so the name is not evidence.
 
 [meta]
 name = "app-caches"
@@ -143,4 +158,52 @@ evidence = "The client re-creates its state directory on launch; playlists are s
 recoverable = true
 keep_days = 0
 requires = ["dir:{cache}/spotify"]
+privilege = "user"
+
+# The agent directories below are the only cache-shaped children of a directory
+# that is mostly history. `~/.codex/packages` (downloaded release binaries) and
+# `~/.claude/projects` (transcripts) are what make those directories large, and
+# neither is a cache.
+[[rule]]
+id = "app.codex.cache"
+section = "app-caches"
+kind = "dir-sweep"
+root = "{home}/.codex/cache"
+evidence = "Cached app-server capabilities and the remote plugin catalog; fetched again on the next call."
+recoverable = true
+keep_days = 0
+requires = ["dir:{home}/.codex"]
+privilege = "user"
+
+[[rule]]
+id = "app.claude.cache"
+section = "app-caches"
+kind = "dir-sweep"
+root = "{home}/.claude/cache"
+evidence = "The model catalog and a copy of the changelog; both are fetched again."
+recoverable = true
+keep_days = 0
+requires = ["dir:{home}/.claude"]
+privilege = "user"
+
+[[rule]]
+id = "app.claude.shell-snapshots"
+section = "app-caches"
+kind = "dir-sweep"
+root = "{home}/.claude/shell-snapshots"
+evidence = "One shell environment snapshot per session; the next session writes its own."
+recoverable = true
+keep_days = 0
+requires = ["dir:{home}/.claude"]
+privilege = "user"
+
+[[rule]]
+id = "app.opencode.cache"
+section = "app-caches"
+kind = "dir-sweep"
+root = "{cache}/opencode"
+evidence = "The model catalog under XDG_CACHE_HOME; fetched again on the next start."
+recoverable = true
+keep_days = 0
+requires = ["dir:{cache}/opencode"]
 privilege = "user"
