@@ -521,3 +521,35 @@ root = "{home}/.docker/buildx"
 evidence = "Reported, never deleted: the directory holds builder state, not only cache."
 keep_days = 30
 privilege = "user"
+
+# Android is the section's largest apparent gap and its smallest real one. The
+# SDK is a toolchain, not a cache: `platforms`, `build-tools`, `ndk` and
+# `system-images` are installed components a pinned build or an existing AVD
+# refers to by name, and removing the wrong version breaks both. The AVDs are
+# worse: `userdata-qemu.img.qcow2` is the emulator's data partition, which is the
+# only copy of whatever was installed in it. Measured on this machine, 11 GiB
+# across the SDK and the AVDs, of which the two rules below are 7 MiB.
+#
+# What *is* a cache is the sdkmanager repository index and the partial component
+# downloads, and both come back on the next `sdkmanager` run.
+[[rule]]
+id = "dev.android.sdk-index-cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{home}/.android/cache"
+evidence = "sdkmanager's copy of the repository index; fetched again on the next package query."
+recoverable = true
+keep_days = 0
+requires = ["dir:{home}/.android"]
+privilege = "user"
+
+[[rule]]
+id = "dev.android.sdk-partial-downloads"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{home}/Android/Sdk/.temp"
+evidence = "Component downloads that never finished; `sdkmanager` starts them again."
+recoverable = true
+keep_days = 0
+requires = ["dir:{home}/Android/Sdk"]
+privilege = "user"
