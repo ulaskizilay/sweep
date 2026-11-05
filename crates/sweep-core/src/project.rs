@@ -131,15 +131,39 @@ const JVM: &[&str] = &[
 /// Ordered by name for readability, not by preference: the first matching entry
 /// wins, and no two entries share a name. A name is deliberately absent when the
 /// name alone is ambiguous - `bin`, `out`, `build` for anything other than a
-/// manifest that produces exactly that output.
+/// manifest that produces exactly that output, and `coverage`, which is a
+/// source directory in plenty of Go repositories and an output directory in a
+/// JavaScript one.
+///
+/// The manifest gate is per directory, and that is what keeps `__pycache__` out
+/// of this table: Python writes it beside every module, so the only `__pycache__`
+/// a manifest sits beside is the one at the project root. Listing it would
+/// report one skipped entry per package in every Python tree and take the
+/// bytecode directories that matter none of the way.
 const ARTIFACTS: &[Spec] = &[
+    Spec {
+        name: ".angular",
+        requires: NODE,
+    },
+    Spec {
+        name: ".astro",
+        requires: NODE,
+    },
     Spec {
         name: ".dart_tool",
         requires: &["pubspec.yaml"],
     },
     Spec {
+        name: ".expo",
+        requires: NODE,
+    },
+    Spec {
         name: ".gradle",
         requires: JVM,
+    },
+    Spec {
+        name: ".hypothesis",
+        requires: PYTHON,
     },
     Spec {
         name: ".mypy_cache",
@@ -150,7 +174,15 @@ const ARTIFACTS: &[Spec] = &[
         requires: NODE,
     },
     Spec {
+        name: ".nox",
+        requires: PYTHON,
+    },
+    Spec {
         name: ".nuxt",
+        requires: NODE,
+    },
+    Spec {
+        name: ".output",
         requires: NODE,
     },
     Spec {
@@ -169,6 +201,18 @@ const ARTIFACTS: &[Spec] = &[
         name: ".svelte-kit",
         requires: NODE,
     },
+    // `.terraform` holds the providers and modules `terraform init` downloaded.
+    // The state file it may contain is the *backend* state, not the resources:
+    // a local backend keeps `terraform.tfstate` in the working directory, which
+    // no rule here names. Losing this directory costs one `terraform init`.
+    Spec {
+        name: ".terraform",
+        requires: &["*.tf"],
+    },
+    Spec {
+        name: ".terragrunt-cache",
+        requires: &["terragrunt.hcl"],
+    },
     Spec {
         name: ".tox",
         requires: PYTHON,
@@ -184,6 +228,10 @@ const ARTIFACTS: &[Spec] = &[
     Spec {
         name: ".vite",
         requires: NODE,
+    },
+    Spec {
+        name: ".zig-cache",
+        requires: &["build.zig"],
     },
     Spec {
         name: "_build",
@@ -213,6 +261,10 @@ const ARTIFACTS: &[Spec] = &[
     Spec {
         name: "elm-stuff",
         requires: &["elm.json"],
+    },
+    Spec {
+        name: "htmlcov",
+        requires: PYTHON,
     },
     Spec {
         name: "node_modules",
@@ -625,6 +677,43 @@ mod tests {
             .skipped
             .iter()
             .any(|skipped| skipped.path.ends_with("web/target")));
+    }
+
+    #[test]
+    fn terraform_providers_need_a_terraform_file_beside_them() {
+        let temp = tree(&[
+            "infra/main.tf",
+            "infra/.terraform/providers/registry.terraform.io/hashicorp/aws",
+            "web/package.json",
+            "web/.terraform/providers/x",
+        ]);
+        age(&temp.path().join("infra/.terraform"), 60);
+        age(&temp.path().join("web/.terraform"), 60);
+
+        let found = run(temp.path(), 6, 30);
+        assert_eq!(names(&found, temp.path()), ["infra/.terraform"]);
+        assert!(
+            found
+                .skipped
+                .iter()
+                .any(|skipped| skipped.path.ends_with("web/.terraform")),
+            "a .terraform in a project with no .tf file is not a target"
+        );
+    }
+
+    #[test]
+    fn a_python_output_directory_needs_a_python_manifest() {
+        let temp = tree(&[
+            "py/pyproject.toml",
+            "py/htmlcov/index.html",
+            "js/package.json",
+            "js/htmlcov/index.html",
+        ]);
+        age(&temp.path().join("py/htmlcov"), 60);
+        age(&temp.path().join("js/htmlcov"), 60);
+
+        let found = run(temp.path(), 6, 30);
+        assert_eq!(names(&found, temp.path()), ["py/htmlcov"]);
     }
 
     #[test]

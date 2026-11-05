@@ -14,7 +14,8 @@
 #   * an artifact is selected only when the manifest that produces it is beside
 #     it: `target` needs Cargo.toml or pom.xml, `node_modules` needs package.json,
 #     `.venv` needs a Python manifest, `vendor` needs go.mod, composer.json or
-#     Gemfile. A `node_modules` with no package.json is reported and left alone.
+#     Gemfile, `.terraform` needs a `.tf` file. A `node_modules` with no
+#     package.json is reported and left alone.
 #   * `.git` is never a target, and the walk never descends into an artifact: a
 #     published package ships its own package.json, and "the project inside
 #     node_modules" is not one the user opened

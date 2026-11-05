@@ -195,9 +195,10 @@ you would not expect, and it is the one you cannot undo.
 ### Project artifacts need a manifest, not a directory name
 
 `sweep purge` removes the build output of the projects in your home:
-`node_modules`, `target`, `.venv`, `vendor`, `dist`, `build`. The rule does not
-have a list of names to delete; it has a list of manifests, and a directory is
-only a target when the manifest that produces it sits beside it:
+`node_modules`, `target`, `.venv`, `vendor`, `dist`, `build`, `.terraform`,
+`htmlcov`, `.zig-cache`. The rule does not have a list of names to delete; it
+has a list of manifests, and a directory is only a target when the manifest that
+produces it sits beside it:
 
 ```
 web/package.json      + web/node_modules       →  node_modules is a build artifact
