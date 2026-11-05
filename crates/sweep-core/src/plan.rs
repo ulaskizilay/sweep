@@ -156,6 +156,8 @@ pub struct Plan {
     /// `.trashinfo` records and the payload each one depends on, keyed by the
     /// literal record path the planner pushes.
     pairs: BTreeMap<PathBuf, PathBuf>,
+    /// The user's ignore file. `None` protects nothing.
+    ignore: Option<crate::ignore::Ignore>,
     hash: String,
 }
 
@@ -183,8 +185,21 @@ impl Plan {
         rule: &RuleId,
         ctx: &ValidateCtx<'_>,
     ) -> Result<PathBuf, Reason> {
+        // The user's own protection is checked before any syscall, and again on
+        // the resolved path below: `~/.cache` is often a symlink, so a line
+        // naming the literal path and one naming the real path must both work.
+        if let Some(pattern) = self.ignored(literal) {
+            let reason = Reason::Ignored(pattern.to_string());
+            self.deny(literal, rule, reason.clone());
+            return Err(reason);
+        }
         match validate(literal, ctx) {
             Verdict::Allow { physical } => {
+                if let Some(pattern) = self.ignored(&physical) {
+                    let reason = Reason::Ignored(pattern.to_string());
+                    self.deny(literal, rule, reason.clone());
+                    return Err(reason);
+                }
                 // Metadata is re-read here rather than passed in, so the plan
                 // records the state the decision was made on.
                 let meta = crate::validate::stat_for_plan(ctx.probe, &physical)
@@ -197,6 +212,25 @@ impl Plan {
                 Err(reason)
             }
         }
+    }
+
+    /// Installs the user's ignore file.
+    ///
+    /// A plan built without one protects nothing, which is what every test and
+    /// every caller that predates the file wants.
+    pub fn set_ignore(&mut self, ignore: crate::ignore::Ignore) {
+        self.ignore = Some(ignore);
+    }
+
+    /// The ignore line that protects `path`, when the user wrote one.
+    pub fn ignored(&self, path: &Path) -> Option<&str> {
+        self.ignore.as_ref().and_then(|ignore| ignore.matched(path))
+    }
+
+    /// The installed ignore file, for a scanner that has to skip a whole entry
+    /// rather than one path.
+    pub fn ignore(&self) -> Option<&crate::ignore::Ignore> {
+        self.ignore.as_ref()
     }
 
     /// Records an already-validated item. Crate-internal: the funnel path is the
@@ -260,13 +294,48 @@ impl Plan {
     /// item and can never recurse: a directory scheduled before its children
     /// would fail with `ENOTEMPTY` and be reported as skipped while its children
     /// were still there. Depth, then path, keeps the run deterministic.
+    ///
+    /// A directory that still holds an ignored path is dropped here as a
+    /// backstop. The scanners already refuse to plan one — an ignored entry
+    /// blocks its parent during the walk — so this should never fire in the
+    /// shipped code, but a future kind that plans a directory without walking it
+    /// must not turn a protection into `directory_not_empty` at the sink.
     pub fn finish(&mut self) {
+        self.drop_ancestors_of_ignored();
         self.items.sort_by(|left, right| {
             crate::paths::depth(&right.physical)
                 .cmp(&crate::paths::depth(&left.physical))
                 .then_with(|| left.physical.cmp(&right.physical))
         });
         self.hash = compute_hash(&self.items);
+    }
+
+    fn drop_ancestors_of_ignored(&mut self) {
+        let ignored: Vec<(PathBuf, RuleId)> = self
+            .denied
+            .iter()
+            .filter(|denied| matches!(denied.reason, Reason::Ignored(_)))
+            .map(|denied| (denied.path.clone(), denied.rule.clone()))
+            .collect();
+        if ignored.is_empty() {
+            return;
+        }
+        let mut dropped: Vec<(PathBuf, RuleId)> = Vec::new();
+        self.items.retain(|item| {
+            if !item.is_dir {
+                return true;
+            }
+            let Some((_, rule)) = ignored.iter().find(|(path, _)| {
+                path != &item.literal && crate::paths::is_within(&item.literal, path)
+            }) else {
+                return true;
+            };
+            dropped.push((item.literal.clone(), rule.clone()));
+            false
+        });
+        for (path, rule) in dropped {
+            self.deny(&path, &rule, Reason::HoldsIgnored);
+        }
     }
 
     pub fn items(&self) -> &[PlanItem] {
@@ -283,6 +352,14 @@ impl Plan {
     pub fn split(&self, mut chosen: impl FnMut(&PlanItem) -> bool) -> (Plan, Plan) {
         let mut select = Plan::new();
         let mut rest = Plan::new();
+        // The halves keep the user's protection and the pair map. Neither is
+        // read again in the shipped flow - the plan is finished and refusals are
+        // summarised before the split - but a half that silently lost them would
+        // stop protecting a path the day someone pushes to it.
+        select.ignore = self.ignore.clone();
+        rest.ignore = self.ignore.clone();
+        select.pairs = self.pairs.clone();
+        rest.pairs = self.pairs.clone();
         for item in &self.items {
             let target = if chosen(item) { &mut select } else { &mut rest };
             target.seen.insert(item.path().to_path_buf());
@@ -340,6 +417,8 @@ fn compute_hash(items: &[PlanItem]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::validate::{AllowedRoot, Policy};
+    use crate::Xdg;
 
     #[test]
     fn rule_ids_are_restricted() {
@@ -409,6 +488,56 @@ mod tests {
         // The first rule to claim the path keeps it, and the caller is expected
         // to select deepest-root-first so that rule is the narrow one.
         assert_eq!(plan.items()[0].rule(), &narrow);
+    }
+
+    #[test]
+    fn an_ignored_path_is_refused_and_the_directory_holding_it_is_dropped() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().to_path_buf();
+        let cache = home.join(".cache");
+        std::fs::create_dir_all(cache.join("outer/inner")).unwrap();
+        std::fs::write(cache.join("outer/inner/notes.txt"), b"body").unwrap();
+
+        let probe = crate::probe::RealProbe::new().unwrap().with_open_scan();
+        let xdg = Xdg::resolve(|key| match key {
+            "HOME" => Some(home.as_os_str().to_os_string()),
+            _ => None,
+        })
+        .unwrap();
+        let allowed = vec![AllowedRoot::new(&cache)];
+        let ctx = ValidateCtx {
+            xdg: &xdg,
+            probe: &probe,
+            allowed: &allowed,
+            policy: Policy::default(),
+        };
+        let rule = RuleId::new("user.cache.residual").unwrap();
+
+        let mut plan = Plan::new();
+        plan.set_ignore(
+            crate::ignore::Ignore::parse(&home, ".cache/outer/inner\n", "ignore").unwrap(),
+        );
+
+        // The protected path itself: refused before any syscall.
+        let error = plan
+            .push(&cache.join("outer/inner"), &rule, &ctx)
+            .expect_err("the ignore line protects it");
+        assert_eq!(error.code(), "ignored", "{error}");
+
+        // Its parent is a legal target on its own, but the funnel cannot empty a
+        // directory that still holds something, so `finish` drops it. This is the
+        // backstop the scanners are expected to make unnecessary.
+        plan.push(&cache.join("outer"), &rule, &ctx)
+            .expect("the parent itself is allowed");
+        plan.finish();
+        assert!(plan.is_empty(), "the parent must not be planned");
+        assert!(
+            plan.denied()
+                .iter()
+                .any(|denied| denied.reason.code() == "holds_ignored"),
+            "the drop must be reported: {:?}",
+            plan.denied()
+        );
     }
 
     #[test]

@@ -146,10 +146,10 @@ sweep rules — 16 packs, 108 rules, 94 enabled
     model.whisper.cache            dir-age        90d  on    /home/u/.cache/whisper
 ```
 
-Eight kinds (`dir-sweep`, `dir-age`, `file-pattern`, `tool-cache`, `hf-cache`,
-`pkg-cache`, `project-artifacts`, `report-only`) cover every target. `dir-age` keeps a whole subtree
-unless *every* entry in it is idle past the cutoff and nothing in it was left
-alone.
+Nine kinds (`dir-sweep`, `dir-age`, `file-pattern`, `tool-cache`, `trash-empty`,
+`hf-cache`, `pkg-cache`, `project-artifacts`, `report-only`) cover every target.
+`dir-age` keeps a whole subtree unless *every* entry in it is idle past the
+cutoff and nothing in it was left alone.
 
 `pkg-cache` exists because the package cache has no sensible age cutoff. It
 keeps the newest *N* versions of each package, compared with pacman's own
@@ -163,6 +163,34 @@ Rules that are wrong do not load: a root inside `/usr`, a duplicate id, a typo
 in a key. A user overlay at `~/.config/sweep/rules.d/*.toml` may add rules but
 not replace a built-in one. The schema, the retention semantics and the full
 list of load-time refusals are in [`docs/RULES.md`](docs/RULES.md).
+
+### Your own ignore file
+
+A rule's `exclude` is the catalog author saying "not this one". Your ignore file
+is you saying it, and it survives an upgrade because it is yours:
+
+```bash
+$ cat ~/.config/sweep/ignore
+# a checkout I rebuild by hand
+~/code/vendor-checkout
+# disk images, wherever they are
+*.iso
+```
+
+One pattern per line, `#` starts a comment, and the glob language is the one the
+rules already use: `*`, `?`, `**`. A line protects the path **and everything
+below it**, so `~/work` is enough. A pattern without `/` matches a name at any
+depth (`*.iso`); one with `/` is anchored, to `$HOME` for a bare line and to `/`
+for one starting with `/` or `~`.
+
+`clean`, `purge`, `installer` and `aur` skip a protected path and say how many
+they skipped, so you can tell the line took effect. `analyze` and `uninstall`
+act on a path or a package you named in the same breath, and refusing those
+would be refusing an instruction you just gave.
+
+A line that cannot be understood refuses the whole run and names the file, the
+line and the fix. Sweeping past a typo in a protection file is the one outcome
+you would not expect, and it is the one you cannot undo.
 
 ### Project artifacts need a manifest, not a directory name
 

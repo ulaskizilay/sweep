@@ -203,7 +203,13 @@ keeps its parents.
 
 No character classes, no braces, no dependencies. A pattern is matched against
 the path relative to the rule root, on bytes, so a non-UTF-8 name can still be
-excluded. At load time, wildcards alone are refused only for a `{home}` root,
+excluded.
+
+`~/.config/sweep/ignore` uses the same language, but it is the user's file
+rather than the catalog's: it is anchored to `$HOME` (or to `/` for a line
+starting with `/` or `~`), it protects a path and everything below it, and it
+applies to `clean`, `purge`, `installer` and `aur`. The README has the shape;
+`crates/sweep-core/src/ignore.rs` is the reference. At load time, wildcards alone are refused only for a `{home}` root,
 where `*` would mean deleting a home directory one file at a time. Every
 shipped `file-pattern` rule is also required by the corpus test to name at
 least one literal fragment.

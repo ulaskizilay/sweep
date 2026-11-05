@@ -62,7 +62,17 @@ pub struct Scan {
 }
 
 /// Reads `root/files` and pairs every entry with `root/info/<name>.trashinfo`.
-pub fn scan(root: &Path, limits: &Limits, probe: &dyn FsProbe) -> Scan {
+///
+/// `ignore` is the user's ignore file: an entry holding a protected path is
+/// counted as skipped rather than half-emptied, for the same reason a build
+/// artifact is - a payload that no longer matches its record is worse than one
+/// that is still there.
+pub fn scan(
+    root: &Path,
+    limits: &Limits,
+    probe: &dyn FsProbe,
+    ignore: Option<&crate::ignore::Ignore>,
+) -> Scan {
     let files = root.join("files");
     let info = root.join("info");
 
@@ -134,6 +144,12 @@ pub fn scan(root: &Path, limits: &Limits, probe: &dyn FsProbe) -> Scan {
             out.skipped += 1;
             continue;
         }
+        if ignore.is_some_and(|ignore| {
+            ignore.matched(&payload).is_some() || ignore.matched(&record).is_some()
+        }) {
+            out.skipped += 1;
+            continue;
+        }
         let Ok(meta) = probe.symlink_metadata(&payload) else {
             // Gone between the listing and the stat: the next run sees the
             // record without a payload, which is a stale record, not an entry.
@@ -147,6 +163,7 @@ pub fn scan(root: &Path, limits: &Limits, probe: &dyn FsProbe) -> Scan {
             // is an entry to remove, never a subtree to skip. The funnel unlinks
             // the link and never its target.
             spec.include_links = true;
+            spec.ignore = ignore;
             let collected = scan::collect(&payload, &payload, 0, &spec, probe);
             if collected.stop != Stop::Complete {
                 out.stop = collected.stop;
@@ -234,7 +251,7 @@ mod tests {
         let (_temp, root) = fixture();
         entry(&root, "project", "body");
 
-        let found = scan(&root, &Limits::default(), &probe());
+        let found = scan(&root, &Limits::default(), &probe(), None);
         assert_eq!(found.stop, Stop::Complete);
         assert_eq!(found.entries.len(), 1);
         let entry = &found.entries[0];
@@ -255,7 +272,7 @@ mod tests {
         let (_temp, root) = fixture();
         fs::create_dir_all(root.join("files/orphan")).unwrap();
 
-        let found = scan(&root, &Limits::default(), &probe());
+        let found = scan(&root, &Limits::default(), &probe(), None);
         assert!(found.entries.is_empty());
         assert_eq!(found.skipped, 1);
     }
@@ -266,7 +283,7 @@ mod tests {
         entry(&root, "project", "body");
         fs::remove_dir_all(root.join("info")).unwrap();
 
-        let found = scan(&root, &Limits::default(), &probe());
+        let found = scan(&root, &Limits::default(), &probe(), None);
         assert!(found.entries.is_empty());
         assert!(found.missing_root);
     }
@@ -274,7 +291,12 @@ mod tests {
     #[test]
     fn a_missing_trash_is_empty_rather_than_an_error() {
         let temp = tempfile::tempdir().unwrap();
-        let found = scan(&temp.path().join("Trash"), &Limits::default(), &probe());
+        let found = scan(
+            &temp.path().join("Trash"),
+            &Limits::default(),
+            &probe(),
+            None,
+        );
         assert!(found.entries.is_empty());
         assert!(found.missing_root);
         assert_eq!(found.stop, Stop::Complete);
@@ -286,7 +308,7 @@ mod tests {
         fs::write(root.join("files/notes.txt"), "body").unwrap();
         fs::write(root.join("info/notes.txt.trashinfo"), "[Trash Info]\n").unwrap();
 
-        let found = scan(&root, &Limits::default(), &probe());
+        let found = scan(&root, &Limits::default(), &probe(), None);
         assert_eq!(found.entries.len(), 1);
         assert_eq!(found.entries[0].paths, vec![root.join("files/notes.txt")]);
     }
@@ -301,7 +323,7 @@ mod tests {
         record.push(".trashinfo");
         fs::write(root.join("info").join(record), "[Trash Info]\n").unwrap();
 
-        let found = scan(&root, &Limits::default(), &probe());
+        let found = scan(&root, &Limits::default(), &probe(), None);
         assert_eq!(found.entries.len(), 1);
         assert_eq!(found.entries[0].payload, root.join("files").join(name));
     }

@@ -172,6 +172,9 @@ struct RuleRun {
     bytes: u64,
     /// Bytes visited, including entries that were not planned.
     scanned_bytes: u64,
+    /// Paths the user's ignore file protected, so the report can confirm the
+    /// line took effect instead of leaving the user to guess.
+    ignored: usize,
     /// Repositories a scanner refused to judge because part of the tree was
     /// unreadable. Empty for every kind but `hf-cache`.
     preserved: Vec<String>,
@@ -402,6 +405,25 @@ pub fn run(
         }
     };
 
+    // A malformed ignore file refuses the run instead of being skipped: the user
+    // wrote it to protect something, and sweeping past a typo is the one outcome
+    // they would not expect.
+    let ignore = match sweep_core::ignore::Ignore::load(&xdg) {
+        Ok(ignore) => ignore,
+        Err(error) => {
+            eprintln!("sweep {command}: {error}");
+            eprintln!(
+                "  fix {} and run again; nothing was planned",
+                if error.line == 0 {
+                    "the file"
+                } else {
+                    "that line, or delete it"
+                }
+            );
+            return ExitCode::from(crate::EXIT_INVALID_RULES);
+        }
+    };
+
     let mounts = match MountTable::load() {
         Ok(mounts) => mounts,
         Err(error) => {
@@ -428,6 +450,7 @@ pub fn run(
         only,
         &Limits::default(),
         mode,
+        &ignore,
     );
 
     // Which rules the elevated child may act on. Derived from the loaded
@@ -835,6 +858,7 @@ fn build(
     only: &[Section],
     limits: &Limits,
     mode: Mode,
+    ignore: &sweep_core::ignore::Ignore,
 ) -> Built {
     let command = scope.command;
     let sections = scope.sections(only);
@@ -903,6 +927,9 @@ fn build(
     };
 
     let mut plan = Plan::new();
+    if !ignore.is_empty() {
+        plan.set_ignore(ignore.clone());
+    }
     let mut runs: Vec<RuleRun> = Vec::with_capacity(selected.len());
     let mut notes: Vec<String> = Vec::new();
 
@@ -1049,6 +1076,29 @@ fn build(
     }
 
     let refusals = summarise_refusals(&plan);
+    // Two routes reach the same outcome: a walk blocks an ignored entry before it
+    // is ever a candidate, and a kind whose candidates come from somewhere else
+    // (a blob store, a package cache) has the plan refuse it. The user cares
+    // about one number, so both are summed here.
+    let ignored = runs.iter().map(|run| run.ignored).sum::<usize>()
+        + refusals
+            .iter()
+            .filter(|refusal| refusal.code == "ignored")
+            .map(|refusal| refusal.count)
+            .sum::<usize>();
+    if ignored > 0 {
+        // The user wrote a line to protect something. Confirming it took effect
+        // is the difference between "my ignore file works" and "did I put it in
+        // the right place", and only the tool knows which paths it skipped.
+        notes.push(format!(
+            "{ignored} {} left alone by your ignore file (~/.config/sweep/ignore)",
+            if ignored == 1 {
+                "path was"
+            } else {
+                "paths were"
+            }
+        ));
+    }
     Built {
         report: PipelineReport {
             command,
@@ -1149,6 +1199,7 @@ fn base_run(rule: &Rule, status: Status, detail: Option<String>) -> RuleRun {
         refused: 0,
         bytes: 0,
         scanned_bytes: 0,
+        ignored: 0,
         preserved: Vec::new(),
         detail,
     }
@@ -1189,6 +1240,7 @@ fn execute(
     let mut spec = Spec::new(rule.max_depth, limits);
     spec.exclude = &rule.exclude;
     spec.skip_roots = &claimed;
+    spec.ignore = plan.ignore();
     if rule.kind == Kind::FilePattern {
         spec.select = Select::Files(&rule.patterns);
     }
@@ -1197,6 +1249,7 @@ fn execute(
 
     let mut run = base_run(rule, Status::Planned, None);
     run.scanned_bytes = collected.bytes;
+    run.ignored = collected.stats.ignored;
 
     if collected.missing_root {
         run.status = Status::NotPresent;
@@ -1346,10 +1399,23 @@ fn execute_project(
     // counts only the ones that passed discovery and then could not be
     // enumerated completely.
     let mut walk_skipped = 0usize;
+    let mut ignored_artifacts = 0usize;
     for artifact in &found.artifacts {
         let mut spec = Spec::new(usize::MAX, limits);
         spec.include_links = true;
+        spec.ignore = plan.ignore();
         let collected = scan::collect(&artifact.path, &artifact.path, 0, &spec, probe);
+        if collected
+            .blocked
+            .iter()
+            .any(|block| block.kind == BlockKind::Ignored)
+        {
+            // The user protected something inside this artifact. Removing the
+            // rest would leave a tree that looks installed but is not, so the
+            // whole artifact stays and the reason is reported by name.
+            ignored_artifacts += 1;
+            continue;
+        }
         if collected.stop != Stop::Complete
             || collected.root_unreadable
             || !collected.blocked.is_empty()
@@ -1368,7 +1434,14 @@ fn execute_project(
         plan_candidates(plan, ctx, rule, &mut run, candidates);
     }
 
-    run.detail = Some(project_detail(&found, walk_skipped, rule, root));
+    run.ignored = ignored_artifacts;
+    run.detail = Some(project_detail(
+        &found,
+        walk_skipped,
+        ignored_artifacts,
+        rule,
+        root,
+    ));
 
     if run.items == 0 && run.refused == 0 {
         run.status = Status::Empty;
@@ -1384,6 +1457,7 @@ fn execute_project(
 fn project_detail(
     found: &project::Discovery,
     walk_skipped: usize,
+    ignored_artifacts: usize,
     rule: &Rule,
     root: &Path,
 ) -> String {
@@ -1433,6 +1507,10 @@ fn project_detail(
     record(
         "part of the tree could not be read, so the whole artifact was left",
         walk_skipped,
+    );
+    record(
+        "a path your ignore file protects is inside it, so the whole artifact was left",
+        ignored_artifacts,
     );
     if reasons.is_empty() {
         return detail;
@@ -1557,7 +1635,7 @@ fn execute_trash(
     limits: &Limits,
     plan: &mut Plan,
 ) -> RuleRun {
-    let found = trash::scan(root, limits, probe);
+    let found = trash::scan(root, limits, probe, plan.ignore());
     let mut run = base_run(rule, Status::Planned, None);
 
     if found.missing_root {
@@ -1606,8 +1684,8 @@ fn execute_trash(
 
     if found.skipped > 0 {
         run.detail = Some(format!(
-            "{} entries left alone: a payload without a restore record, or one whose tree could \
-             not be read completely",
+            "{} entries left alone: a payload without a restore record, a tree that could not be \
+             read completely, or a path your ignore file protects",
             found.skipped
         ));
     }
@@ -1790,7 +1868,7 @@ fn age_candidates<'a>(
         if let Some(block) = collected.blocked_under(top).first() {
             blocked += 1;
             blocker.get_or_insert(format!(
-                "{} holds a {} entry",
+                "{} holds an entry left alone: {}",
                 top.display(),
                 block.kind.code()
             ));
@@ -2084,6 +2162,7 @@ mod tests {
             &[],
             limits,
             Mode::DryRun,
+            &sweep_core::ignore::Ignore::empty(&xdg.home),
         );
         let preview = funnel::apply(&plan, &probe, Mode::DryRun, "clean", None);
         report.funnel = FunnelReport::of(&preview, Mode::DryRun);
@@ -2399,6 +2478,7 @@ privilege = "user"
             &[],
             &limits,
             Mode::DryRun,
+            &sweep_core::ignore::Ignore::empty(&xdg.home),
         );
         let apply = build(
             Scope::CLEAN,
@@ -2409,6 +2489,7 @@ privilege = "user"
             &[],
             &limits,
             Mode::Apply,
+            &sweep_core::ignore::Ignore::empty(&xdg.home),
         );
 
         // The preview and the run must describe the same plan: a different hash
@@ -2554,6 +2635,7 @@ privilege = "user"
             &[],
             &Limits::default(),
             Mode::Apply,
+            &sweep_core::ignore::Ignore::empty(&xdg.home),
         );
         assert!(!plan.is_empty(), "the fixture must plan one file");
 

@@ -65,6 +65,8 @@ pub struct Stats {
     pub symlinks: usize,
     /// Entries matched by an `exclude` pattern.
     pub excluded: usize,
+    /// Entries protected by the user's ignore file.
+    pub ignored: usize,
     /// Entries below a root another rule claims.
     pub claimed: usize,
     /// Entries on a different device than the rule root.
@@ -102,6 +104,7 @@ pub struct Entry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BlockKind {
     Excluded,
+    Ignored,
     Claimed,
     Symlink,
     OtherDevice,
@@ -115,6 +118,7 @@ impl BlockKind {
     pub fn code(self) -> &'static str {
         match self {
             BlockKind::Excluded => "excluded",
+            BlockKind::Ignored => "ignored",
             BlockKind::Claimed => "claimed_by_another_rule",
             BlockKind::Symlink => "symlink",
             BlockKind::OtherDevice => "other_device",
@@ -206,6 +210,14 @@ pub struct Spec<'a> {
     /// are links the package manager writes, and a sweep that leaves them
     /// behind leaves a tree that looks installed but is not.
     pub include_links: bool,
+    /// The user's ignore file, when one is installed.
+    ///
+    /// Checked per entry exactly like `exclude`, but with one difference that
+    /// matters: a matched entry blocks its parent from being planned rather than
+    /// being planned and then refused. That is what turns "you protected a file
+    /// in here" into `left alone: 1 ignored` instead of a `directory_not_empty`
+    /// refusal at the sink.
+    pub ignore: Option<&'a crate::ignore::Ignore>,
     pub limits: &'a Limits,
 }
 
@@ -217,6 +229,7 @@ impl<'a> Spec<'a> {
             exclude: &[],
             skip_roots: &[],
             include_links: false,
+            ignore: None,
             limits,
         }
     }
@@ -391,6 +404,17 @@ fn walk(
         {
             out.stats.excluded += 1;
             block(out, base, &child, BlockKind::Excluded);
+            continue;
+        }
+        // The user's own protection comes before the catalog's exclusions are
+        // reported, so a path named in the ignore file says so rather than
+        // appearing as an ordinary excluded entry.
+        if spec
+            .ignore
+            .is_some_and(|ignore| ignore.matched_exact(&child).is_some())
+        {
+            out.stats.ignored += 1;
+            block(out, base, &child, BlockKind::Ignored);
             continue;
         }
         if spec.skip_roots.iter().any(|root| is_within(root, &child)) {
@@ -793,6 +817,36 @@ mod tests {
         assert_eq!(block.kind, BlockKind::Excluded);
         assert!(collected.blocked_within(Path::new("app/keep")).is_some());
         assert!(collected.blocked_within(Path::new("app/other")).is_none());
+    }
+
+    #[test]
+    fn an_ignored_entry_blocks_every_ancestor_up_to_the_root() {
+        let (temp, probe) = fixture();
+        let root = temp.path().join("cache");
+        touch(&root, "app/old.txt", "old");
+        touch(&root, "app/mine/fresh.txt", "fresh");
+
+        // The walk does not know where `$HOME` is, so the pattern is anchored to
+        // the fixture root by naming the whole path.
+        let ignore =
+            crate::ignore::Ignore::parse(temp.path(), "cache/app/mine\n", "ignore").unwrap();
+        let specs = limits();
+        let mut spec = Spec::new(8, &specs);
+        spec.ignore = Some(&ignore);
+        let collected = collect(&root, &root, 1, &spec, &probe);
+
+        assert_eq!(collected.stats.ignored, 1);
+        let block = collected
+            .blocked_within(Path::new("app"))
+            .expect("an ignored child blocks its parent");
+        assert_eq!(block.kind, BlockKind::Ignored);
+        assert!(
+            !collected
+                .entries
+                .iter()
+                .any(|entry| entry.path.ends_with("app/mine")),
+            "an ignored directory is never entered"
+        );
     }
 
     #[test]

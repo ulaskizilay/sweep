@@ -68,12 +68,27 @@ Checks 1–9 do no I/O, so a forbidden path costs nanoseconds. This matters beca
 the scanner calls `validate` once per candidate, and a large cache can hold
 hundreds of thousands.
 
+Before any of them, the plan asks the user's ignore file
+(`~/.config/sweep/ignore`, `ignored`). That check is first for two reasons: it
+costs no syscall, and a path the user protected should be reported as protected,
+not as whatever else it happened to trip. It is also checked again on the
+resolved path, because `~/.cache` is often a symlink and a line may name either
+the literal or the real path.
+
+The ignore file can only **narrow** a plan. It never widens one: a line cannot
+admit a path that `validate` would refuse, because the check runs before the
+allowlist rather than instead of it. And it is read by the user process only,
+so it cannot reach the elevated child — which is not a gap, because the child
+acts on the plan it is sent and the parent never sends an ignored path.
+
 ### Reason codes are an API
 
 `Reason::code()` strings appear in `--json` output and in the operation log. They
 are stable: renaming one breaks user scripts and log correlation. The closed set
 is pinned by `reason_codes_are_unique` and by the fuzz target's
-`REASON_CODES` table.
+`REASON_CODES` table. `ignored` and `holds_ignored` are the two the user can act
+on directly: the first names the line, the second says a directory still holds
+something that line protects.
 
 ---
 

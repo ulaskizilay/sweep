@@ -27,6 +27,7 @@
 
 pub mod fs_facts;
 pub mod funnel;
+pub mod ignore;
 pub mod leftovers;
 pub mod meta;
 pub mod model_cache;

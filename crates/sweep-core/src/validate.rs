@@ -165,6 +165,13 @@ pub enum Reason {
     /// A paired item whose payload is still there: the `.trashinfo` record of an
     /// entry the run did not manage to remove.
     PayloadRemains,
+    /// The path is covered by a line in `~/.config/sweep/ignore`. Carries the
+    /// line as written, so the report can name the edit that would change it.
+    Ignored(String),
+    /// A directory that still holds an ignored path, so it cannot be emptied in
+    /// one `unlinkat`. Distinct from `Ignored` because the user protected
+    /// something *inside* it, not the directory itself.
+    HoldsIgnored,
 }
 
 impl Reason {
@@ -198,6 +205,8 @@ impl Reason {
             Reason::AlreadyGone => "already_gone",
             Reason::NotSelected => "not_selected",
             Reason::PayloadRemains => "payload_remains",
+            Reason::Ignored(_) => "ignored",
+            Reason::HoldsIgnored => "holds_ignored",
         }
     }
 
@@ -246,6 +255,10 @@ impl std::fmt::Display for Reason {
             Reason::PayloadRemains => {
                 f.write_str("its payload is still in the trash, so the restore record was kept")
             }
+            Reason::Ignored(pattern) => {
+                write!(f, "protected by the ignore line {pattern:?}")
+            }
+            Reason::HoldsIgnored => f.write_str("it still holds a path your ignore file protects"),
         }
     }
 }

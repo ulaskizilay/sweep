@@ -105,7 +105,10 @@ impl Selection {
             // with a payload and a restore record. The pair is what makes the
             // deletion safe, so the selection carries both halves.
             Kind::TrashEmpty => {
-                let found = crate::trash::scan(&root, limits, probe);
+                // The child re-derives what the rule selects, not what the
+                // parent planned: the ignore file is a narrowing the parent
+                // already applied, so it is not part of this answer.
+                let found = crate::trash::scan(&root, limits, probe, None);
                 if found.stop != Stop::Complete
                     || found.missing_root
                     || found.not_a_directory

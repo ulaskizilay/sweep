@@ -826,6 +826,86 @@ fn clean_dry_run_counts_the_trash_and_removes_nothing() {
 }
 
 #[test]
+fn clean_leaves_the_paths_the_ignore_file_protects() {
+    let home = home();
+    let kept = firefox_cache(home.path());
+    let taken = home
+        .path()
+        .join(".cache/mozilla/firefox/profile/cache2/entries/other");
+    write(
+        home.path(),
+        ".cache/mozilla/firefox/profile/cache2/entries/blob",
+        "protected body",
+    );
+    write(
+        home.path(),
+        ".cache/mozilla/firefox/profile/cache2/entries/other",
+        "ordinary cache body",
+    );
+    write(
+        home.path(),
+        ".config/sweep/ignore",
+        "# my own cache\n.cache/mozilla/firefox/profile/cache2/entries/blob\n",
+    );
+
+    let output = run_in(home.path(), &["clean", "--yes", "--only", "browsers"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+
+    assert!(kept.exists(), "an ignored path is never removed");
+    assert!(!taken.exists(), "its sibling is not protected");
+
+    let rows = log_rows(home.path());
+    assert!(
+        rows.iter()
+            .all(|row| Path::new(row["path"].as_str().expect("path")) != kept),
+        "the ledger must not name a protected path"
+    );
+    assert!(
+        output.stdout.contains("left alone by your ignore file"),
+        "the summary must confirm the protection took effect:\n{}",
+        output.stdout
+    );
+}
+
+#[test]
+fn a_malformed_ignore_file_refuses_the_run_and_names_the_line() {
+    let home = home();
+    let blob = firefox_cache(home.path());
+    write(
+        home.path(),
+        ".cache/mozilla/firefox/profile/cache2/entries/blob",
+        "cache body",
+    );
+    write(home.path(), ".config/sweep/ignore", "~/.cache/\n");
+
+    let output = run_in(home.path(), &["clean", "--yes", "--only", "browsers"]);
+    assert_eq!(output.code, Some(3), "stderr: {}", output.stderr);
+    assert!(
+        output.stderr.contains(".config/sweep/ignore:1"),
+        "the message must name the file and the line:\n{}",
+        output.stderr
+    );
+    assert!(
+        output.stderr.contains("ends with `/`"),
+        "the message must name the cause:\n{}",
+        output.stderr
+    );
+    assert!(
+        output.stderr.contains("nothing was planned"),
+        "the message must say nothing happened:\n{}",
+        output.stderr
+    );
+    assert!(blob.exists(), "a refused run removes nothing");
+    assert!(
+        !home
+            .path()
+            .join(".local/state/sweep/operations.jsonl")
+            .exists(),
+        "a refused run writes no ledger"
+    );
+}
+
+#[test]
 fn clean_yes_removes_only_planned_paths_and_logs_them() {
     let home = home();
     let blob = firefox_cache(home.path());
