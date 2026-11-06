@@ -732,6 +732,54 @@ fn clean_without_yes_on_a_pipe_declines_and_writes_nothing() {
 }
 
 #[test]
+fn an_unfinished_download_is_taken_only_after_it_is_abandoned() {
+    let home = home();
+    write(home.path(), "Downloads/film.mp4.part", "half a film");
+    write(
+        home.path(),
+        "Downloads/arch/disk.iso.crdownload",
+        "half an image",
+    );
+    write(home.path(), "Downloads/notes.txt", "a user document");
+    // The retention is the whole safety argument: a transfer running right now
+    // writes an mtime from seconds ago, so only an abandoned one is old.
+    age_file(&home.path().join("Downloads/film.mp4.part"), 10);
+    age_file(&home.path().join("Downloads/arch/disk.iso.crdownload"), 10);
+
+    let output = run_in(
+        home.path(),
+        &["clean", "--yes", "--only", "user-essentials"],
+    );
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+
+    assert!(!home.path().join("Downloads/film.mp4.part").exists());
+    assert!(!home
+        .path()
+        .join("Downloads/arch/disk.iso.crdownload")
+        .exists());
+    assert!(
+        home.path().join("Downloads/notes.txt").exists(),
+        "the suffix is the target, not the directory"
+    );
+}
+
+#[test]
+fn a_fresh_download_in_progress_is_kept() {
+    let home = home();
+    write(home.path(), "Downloads/film.mp4.part", "still arriving");
+
+    let output = run_in(
+        home.path(),
+        &["clean", "--yes", "--only", "user-essentials"],
+    );
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    assert!(
+        home.path().join("Downloads/film.mp4.part").exists(),
+        "a file written moments ago is a download that is still running"
+    );
+}
+
+#[test]
 fn clean_empties_the_trash_as_pairs_and_leaves_unpaired_payloads() {
     let home = home();
     write(

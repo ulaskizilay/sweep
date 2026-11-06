@@ -80,3 +80,22 @@ recoverable = true
 keep_days = 7
 privilege = "user"
 max_depth = 6
+
+# A transfer that never finished. Every browser writes its own suffix while the
+# body is still arriving, and renames the file when it completes, so a name with
+# one of these suffixes is by definition an incomplete file. The retention is
+# what makes it safe rather than the name: a download running right now has an
+# mtime from seconds ago, and a week-old fragment is one the user gave up on.
+# Resuming is the browser's decision, and a missing fragment only costs the part
+# that had not arrived yet.
+[[rule]]
+id = "user.downloads.partial"
+section = "user-essentials"
+kind = "file-pattern"
+root = "{home}/Downloads"
+pattern = ["*.part", "*.crdownload", "*.download", "*.opdownload"]
+evidence = "An unfinished transfer; the browser re-requests what it did not finish, and a week-old fragment is an abandoned download."
+recoverable = true
+keep_days = 7
+privilege = "user"
+max_depth = 2
