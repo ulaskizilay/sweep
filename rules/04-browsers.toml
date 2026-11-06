@@ -15,6 +15,14 @@
 # Profile discovery is not needed for the cache trees, but it would be needed for
 # Flatpak (`~/.var/app/<id>/cache`) and for a per-profile breakdown. Neither is
 # covered: a rule root is a fixed template, not a glob.
+#
+# The service worker cache is not a rule for the same reason, and it is the one
+# that looks most like a miss. It lives inside the profile
+# (`Default/Service Worker/`), the profile directory name is the user's choice so
+# no rule root can spell it, and the directory holds `CacheStorage/` - the
+# offline storage a site registered - beside the regenerable `ScriptCache/`.
+# Under a megabyte on a working machine, and the profile is exactly what the rest
+# of this pack never touches.
 
 [meta]
 name = "browsers"
