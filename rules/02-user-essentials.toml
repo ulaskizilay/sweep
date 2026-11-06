@@ -7,13 +7,35 @@
 #
 # Two mechanisms keep it from swallowing the rest of the catalog:
 #
-#   * every other rule's root is excluded from its walk, so a target with a
-#     retention policy of its own is never taken by the residual sweep;
-#   * `ms-playwright` is named in `exclude` because a re-download is hundreds of
-#     megabytes that a user did not ask for.
+#   * every other rule's root is excluded from its walk, from the whole catalog
+#     rather than from the selected sections, so a target with a retention
+#     policy of its own is never taken by the residual sweep even under
+#     `--only`;
+#   * `exclude` names the subtrees that are not regenerable, or that are
+#     regenerable at a cost a user would not accept silently. That list is a
+#     denial list and cannot be complete, so an entry belongs on it only with a
+#     measurement behind it: what the directory holds, and what it costs to get
+#     back.
+#
+#     ms-playwright*  a browser download per version, 1.5 GiB on one machine
+#     google-chrome-for-testing-headless
+#                     the same thing for Chrome's headless shell, 298 MiB
+#     prisma           query engines, 91 MiB, fetched again on the next
+#                      `prisma generate`
+#     next-swc         the native SWC binary, 64 MiB, per version
+#     bazel*           bazel and bazelisk toolchain downloads
+#     lutris           the parent of `app.lutris.cache`'s root. The rule covers
+#                      `installer/`; the GOG/Epic tokens and the save-sync state
+#                      sit beside it at the root, so the claim on the child does
+#                      not protect them.
+#     mesa_shader_cache*  compiled GPU shaders, 44 MiB. Rebuilding is minutes
+#                      per game, and a shader recompile shows up as stutter.
+#     nvidia              the same cache for the proprietary driver, 32 MiB.
 #
 # Anonymous cache directories - the Electron application nobody wrote a rule for
-# - are exactly what this rule is for.
+# - are exactly what this rule is for. A subtree holding anything the walk
+# refused to look at (a symlink, a mount, an unreadable directory) is kept
+# outright, which is what saves a Python virtualenv left under ~/.cache.
 
 [meta]
 name = "user-essentials"
@@ -24,7 +46,16 @@ id = "user.cache.residual"
 section = "user-essentials"
 kind = "dir-age"
 root = "{cache}"
-exclude = ["ms-playwright*"]
+exclude = [
+  "ms-playwright*",
+  "google-chrome-for-testing-headless",
+  "prisma",
+  "next-swc",
+  "bazel*",
+  "lutris",
+  "mesa_shader_cache*",
+  "nvidia",
+]
 evidence = "The XDG cache base holds data applications must tolerate losing; an entry untouched for a week is not in use."
 recoverable = true
 keep_days = 7

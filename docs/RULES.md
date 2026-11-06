@@ -173,6 +173,14 @@ A single fresh file keeps its whole subtree. So does a symlink, because the
 newest part of the tree is then unknown, and unknown is not "old". The root
 itself is never planned.
 
+"A claimed root" means a root some rule in the catalog names, and the set is the
+whole catalog rather than the sections this run selected. Otherwise the same
+path is protected in a bare `clean` and unprotected in `clean --only
+user-essentials`, which is the invocation where a user expects *less* to happen.
+Whether that other rule is enabled, disabled or report-only makes no difference:
+the catalog saying "I look at this path" is the reason, and the blanket sweep is
+not a better owner of it in any of those three states.
+
 The newest mtime comes from every entry in the group *and* the cutoff comparison
 is `>=`: a group with one entry exactly at the cutoff is kept, and a fresh child
 keeps its parents.
@@ -253,7 +261,12 @@ Two of these carry a wider meaning:
   `{runtime}` are the only two that may be one at all, and `{cache}` is the
   residual sweep: applications must tolerate losing cache data, and seven idle
   days is measured rather than assumed. Without the age gate, one rule would
-  mean "empty the cache, always".
+  mean "empty the cache, always". Its `exclude` list is a denial list and cannot
+  be complete, so an entry belongs there only with a measurement: what the
+  directory holds and what it costs to get back. Everything the walk refuses to
+  look at - a symlink, a mount, an unreadable directory - keeps its whole
+  subtree, which is what protects a Python virtualenv someone left under
+  `~/.cache`.
 - **`{home}` may only be a root for `file-pattern` or `project-artifacts`, with
   `max_depth <= 6`, and a `file-pattern` must name literal text.**
   `.xsession-errors*` is a target; `*` is a way to delete a home directory one

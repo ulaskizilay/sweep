@@ -904,6 +904,20 @@ fn build(
         .iter()
         .map(|rule| rule.expanded_root(xdg))
         .collect();
+    // The claim set is the whole catalog, not this run's selection. A root
+    // another rule names is off limits to the blanket sweep whatever the user
+    // asked for, and whether that rule is enabled, disabled or report-only: the
+    // catalog saying "I look at this path" is the reason, and none of those
+    // three answers makes the blanket sweep a better owner. Taking the claim
+    // set from `deleting` made it depend on `--only`: a bare `clean` left
+    // `{cache}/lutris` alone because `app.lutris.cache` claimed a child of it,
+    // while `clean --only user-essentials` planned the parent and would have
+    // removed the GOG and Epic tokens stored at its root.
+    let claims: Vec<PathBuf> = set
+        .rules()
+        .iter()
+        .map(|rule| rule.expanded_root(xdg))
+        .collect();
 
     let ctx = ValidateCtx {
         xdg,
@@ -942,7 +956,7 @@ fn build(
                 skip_detail(command, rule, xdg, status),
             )),
             None => runs.push(execute(
-                rule, &root, probe, &ctx, limits, &mut plan, &roots, now,
+                rule, &root, probe, &ctx, limits, &mut plan, &claims, now,
             )),
         }
     }
@@ -1229,8 +1243,8 @@ fn execute(
         return execute_trash(rule, root, probe, ctx, limits, plan);
     }
 
-    // Roots another enabled rule owns: the residual cache sweep must not take a
-    // target that has a retention policy of its own.
+    // Roots the catalog has an opinion about: the residual cache sweep must not
+    // take a target that has a retention policy of its own.
     let claimed: Vec<PathBuf> = all_roots
         .iter()
         .filter(|other| other.as_path() != root && is_within(root, other))
@@ -2148,6 +2162,15 @@ mod tests {
     }
 
     fn report_for(temp: &tempfile::TempDir, body: &str, limits: &Limits) -> PipelineReport {
+        report_for_only(temp, body, limits, &[])
+    }
+
+    fn report_for_only(
+        temp: &tempfile::TempDir,
+        body: &str,
+        limits: &Limits,
+        only: &[Section],
+    ) -> PipelineReport {
         let xdg = xdg_at(temp.path());
         let set = RuleSet::from_sources(&[sweep_core::rules::Source::new("test.toml", body)], &xdg)
             .expect("rule pack loads");
@@ -2159,7 +2182,7 @@ mod tests {
             &xdg,
             &probe,
             &mounts,
-            &[],
+            only,
             limits,
             Mode::DryRun,
             &sweep_core::ignore::Ignore::empty(&xdg.home),
@@ -2279,6 +2302,50 @@ privilege = "user"
         // sweep takes `unknown` only.
         assert_eq!(residual.items, 2, "{residual:?}");
         assert_eq!(report.totals.items, 2);
+    }
+
+    #[test]
+    fn a_claimed_root_is_skipped_even_when_its_rule_is_not_selected() {
+        // The claim is a statement about the path, not about this invocation.
+        // It used to be built from the selected rules, so `--only` silently
+        // handed the blanket sweep every root outside the selected sections.
+        let temp = tree(&[
+            ("cache/game/installer/blob.bin", "installer"),
+            ("cache/game/token", "token"),
+            ("cache/unknown/blob.bin", "unknown"),
+        ]);
+        let base = temp.path().join("cache");
+        for path in [
+            base.join("game"),
+            base.join("game/token"),
+            base.join("game/installer"),
+            base.join("game/installer/blob.bin"),
+            base.join("unknown"),
+            base.join("unknown/blob.bin"),
+        ] {
+            age(&path, 90);
+        }
+        age(&base, 90);
+
+        let body = format!(
+            "{}{}",
+            single_rule("test.residual", "dir-age", &base, 7),
+            single_rule("test.game", "dir-sweep", &base.join("game/installer"), 0)
+                .replace("section = \"user-essentials\"", "section = \"apps\"")
+        );
+        let report = report_for_only(&temp, &body, &Limits::default(), &[Section::UserEssentials]);
+        let residual = report
+            .rules
+            .iter()
+            .find(|run| run.id == "test.residual")
+            .unwrap();
+        // `game` holds a claimed child, so the whole of it is kept - including
+        // the token beside the claim, which is what the walk cannot judge.
+        assert_eq!(residual.items, 2, "{residual:?}");
+        assert!(
+            report.rules.iter().all(|run| run.id != "test.game"),
+            "a section outside --only is not scanned"
+        );
     }
 
     #[test]

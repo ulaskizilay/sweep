@@ -874,6 +874,65 @@ fn clean_dry_run_counts_the_trash_and_removes_nothing() {
 }
 
 #[test]
+fn a_section_limited_run_does_not_widen_the_blanket_cache_sweep() {
+    // The residual sweep keeps away from every root the catalog names, and that
+    // set is the whole catalog rather than the selected sections. It used to be
+    // built from the selection, so `--only user-essentials` handed the blanket
+    // sweep the roots of every other section: a bare `clean` left
+    // `~/.cache/spotify` alone because `app.spotify.cache` claims it, while the
+    // section-limited run planned the whole directory.
+    //
+    // The other three entries are the `exclude` list, which has to hold on its
+    // own: `lutris` is the parent of its rule's root, so the claim covers only
+    // the `installer/` child and the tokens beside it would still be reachable.
+    let home = home();
+    for (relative, body) in [
+        (".cache/spotify/component_crx_cache/blob", "cache"),
+        (".cache/lutris/.gog.token", "token"),
+        (".cache/lutris/installer/game.exe", "installer"),
+        (".cache/mesa_shader_cache/blob", "shader"),
+        (".cache/unknown-app/blob", "cache"),
+    ] {
+        write(home.path(), relative, body);
+        age(&home.path().join(relative), 30);
+    }
+    for directory in [
+        ".cache",
+        ".cache/spotify",
+        ".cache/spotify/component_crx_cache",
+        ".cache/lutris",
+        ".cache/lutris/installer",
+        ".cache/unknown-app",
+    ] {
+        age(&home.path().join(directory), 30);
+    }
+
+    let output = run_in(
+        home.path(),
+        &["clean", "--dry-run", "--json", "--only", "user-essentials"],
+    );
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    let report: serde_json::Value =
+        serde_json::from_str(&output.stdout).expect("one JSON document");
+    let residual = report["rules"]
+        .as_array()
+        .expect("rules")
+        .iter()
+        .find(|row| row["id"] == "user.cache.residual")
+        .expect("the residual sweep is part of the section");
+
+    // The unknown app directory and the file in it. Everything else is either
+    // claimed by a rule in another section or named in `exclude`.
+    assert_eq!(residual["items"], 2, "{residual}");
+    assert!(home
+        .path()
+        .join(".cache/spotify/component_crx_cache")
+        .exists());
+    assert!(home.path().join(".cache/lutris/.gog.token").exists());
+    assert!(home.path().join(".cache/mesa_shader_cache/blob").exists());
+}
+
+#[test]
 fn clean_leaves_the_paths_the_ignore_file_protects() {
     let home = home();
     let kept = firefox_cache(home.path());
