@@ -173,6 +173,53 @@ fn an_unbounded_retention_is_declared_recoverable() {
 }
 
 #[test]
+fn a_cache_root_that_holds_user_state_keeps_it() {
+    // Each of these roots holds something a rebuild does not bring back beside
+    // the cache the rule is for: a change history, an offline download, a login
+    // token. The catalog's whole argument is "the target is regenerable", and
+    // these are the places where a wider root quietly makes that false.
+    let set = catalog();
+    let rule = |id: &str| {
+        set.rules()
+            .iter()
+            .find(|rule| rule.id.as_str() == id)
+            .unwrap_or_else(|| panic!("{id} is missing from the catalog"))
+    };
+    let excludes = |id: &str| -> Vec<String> {
+        rule(id)
+            .exclude
+            .iter()
+            .map(|pattern| pattern.source().to_string())
+            .collect()
+    };
+
+    // IntelliJ's LocalHistory is its own revision store for uncommitted work.
+    assert!(
+        excludes("dev.jetbrains.cache").contains(&"**/LocalHistory".to_string()),
+        "the IDE's change history is not regenerable: {:?}",
+        excludes("dev.jetbrains.cache")
+    );
+
+    // Spotify's audio chunks and per-user state are the two trees that are not
+    // caches, and `Data/` is 1.7 GiB of offline downloads on a real machine.
+    for pattern in ["Data/**", "Users/**"] {
+        assert!(
+            excludes("app.spotify.cache").contains(&pattern.to_string()),
+            "{pattern} is user state, not cache: {:?}",
+            excludes("app.spotify.cache")
+        );
+    }
+
+    // Lutris protects its tokens by naming the child instead of the root: the
+    // save-sync state sits at the root under names no glob can spell.
+    assert_eq!(
+        rule("app.lutris.cache").root.raw(),
+        "{cache}/lutris/installer",
+        "the root holds .gog.token, .egs.token and one <save>.json per game"
+    );
+}
+
+#[test]
 fn a_file_pattern_rule_never_matches_everything() {
     for rule in catalog().rules() {
         if rule.kind != Kind::FilePattern {
@@ -294,7 +341,7 @@ fn the_catalog_digest_is_unchanged() {
 
     // Update this value in the same commit as the rule change, so the review
     // diff shows the catalog moved on purpose.
-    const EXPECTED: u64 = 0xf050_add1_1256_289c;
+    const EXPECTED: u64 = 0x5742_b5a1_6c30_afb5;
     assert_eq!(
         format!("{hash:016x}"),
         format!("{EXPECTED:016x}"),

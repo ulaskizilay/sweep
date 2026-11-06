@@ -452,14 +452,29 @@ keep_days = 0
 requires = ["dir:{cache}/Cypress"]
 privilege = "user"
 
-# IntelliJ keeps indexes here and rebuilds them on the next project open. The
-# IDE configuration and plugins live under ~/.config and are not touched.
+# The JetBrains system directory is ~/.cache/JetBrains/<product><version> on
+# Linux. Almost all of it is rebuilt on the next project open: indexes, caches,
+# logs.
+#
+# One child is not. `LocalHistory/` is the IDE's own revision store for work that
+# was never committed - the user's unsaved change history - and no rebuild brings
+# it back. It is excluded by name. The `**` is defensive: the product directory
+# is one level deep today, and a deeper layout should not be what makes the
+# exclude stop matching. The IDE configuration and plugins live under ~/.config
+# and are not touched either.
+#
+# Android Studio uses the same layout under a different root,
+# ~/.cache/Google/AndroidStudio<version>, which this rule does not reach. A rule
+# root is a fixed template, so a versioned directory cannot be named; that gap is
+# recorded rather than papered over with a `{cache}/Google` root that would take
+# whatever else Google writes there.
 [[rule]]
 id = "dev.jetbrains.cache"
 section = "dev-tools"
 kind = "dir-sweep"
 root = "{cache}/JetBrains"
-evidence = "IDE indexes and logs are rebuilt from the project and installed plugins."
+exclude = ["**/LocalHistory"]
+evidence = "Indexes, caches and logs are rebuilt from the project; the LocalHistory revision store beside them is excluded because nothing rebuilds it."
 recoverable = true
 keep_days = 0
 requires = ["dir:{cache}/JetBrains"]

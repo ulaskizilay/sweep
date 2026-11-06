@@ -45,12 +45,21 @@ keep_days = 0
 requires = ["dir:{data}/Steam"]
 privilege = "user"
 
+# Lutris's cache root is a mixed bag, and the names in it are the app's, not a
+# convention: `settings.CACHE_DIR` holds the artwork, the shader cache, the
+# downloaded installers, `versions.json` - and `.gog.token`, `.egs.token`,
+# `gog-library.json`, `egs-library.json` plus one `<save>.json` per save-synced
+# game, written at the root with names this catalog cannot predict.
+#
+# So the rule names the one child that is only a download. Taking the root would
+# log the user out of GOG and Epic and drop the save-sync state, which is why the
+# scope stops at `installer/`.
 [[rule]]
 id = "app.lutris.cache"
 section = "apps"
 kind = "dir-sweep"
-root = "{cache}/lutris"
-evidence = "Launcher artwork and installer caches, fetched again on demand."
+root = "{cache}/lutris/installer"
+evidence = "Downloaded game installers, fetched again by the installer; the GOG/Epic tokens and save-sync state in the parent are left alone."
 recoverable = true
 keep_days = 0
 requires = ["bin:lutris"]

@@ -147,14 +147,31 @@ keep_days = 0
 requires = ["dir:{config}/Slack"]
 privilege = "user"
 
-# Spotify keeps its whole client state under the cache base rather than under
-# ~/.config, and treats a missing directory as a first run.
+# Spotify keeps everything under the cache base rather than under ~/.config:
+# the Chromium sub-caches, the shader caches, the TTS and DRM components - and
+# two trees that are not caches at all.
+#
+#   Data/     the audio chunks, which is where an offline download lives. The
+#             user asked for those to be available without a network; deleting
+#             them is a data-plan cost, not a rebuild.
+#   Users/    per-user state: playback settings, the queue, restrictions.
+#
+# Both are excluded, together with the Chromium storage directories the rest of
+# this section never touches. What is left is about 400 MiB of regenerable
+# cache on a machine where the directory is 2.2 GiB.
 [[rule]]
 id = "app.spotify.cache"
 section = "app-caches"
 kind = "dir-sweep"
 root = "{cache}/spotify"
-evidence = "The client re-creates its state directory on launch; playlists are server-side."
+exclude = [
+  "Data/**",
+  "Users/**",
+  "Browser/Local Storage/**",
+  "Browser/IndexedDB/**",
+  "Browser/Session Storage/**",
+]
+evidence = "Chromium sub-caches, shader caches and downloaded components; offline audio under Data/ and per-user state under Users/ are excluded."
 recoverable = true
 keep_days = 0
 requires = ["dir:{cache}/spotify"]
