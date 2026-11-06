@@ -368,7 +368,7 @@ because it is a build helper, not a command to type.
 | `sweep clean --privileged` | also sweep root-owned system caches, through `run0` or `sudo` | works |
 | `sweep purge` | `node_modules`, `target`, virtualenvs — only where a manifest says a build made them | works |
 | `sweep installer` | package and image files in `~/Downloads` that were never touched again | works |
-| `sweep status` | disk, inodes, memory, load, package cache, orphans, trash, last sweep; `--json` for scripts | works |
+| `sweep status` | disk, inodes, memory, load, package cache, orphans, trash, orphaned user units, last sweep; `--json` for scripts | works |
 | `sweep analyze` | the disk explorer, and `--largest` for a pipe; the only deletion is a move to the trash | works |
 | `sweep history` | every run from the operation log, grouped by session; `--json` for scripts | works |
 | `sweep optimize` | rebuild the user-side indexes through the tools that own them; system-wide tasks are named, never run as root | works |
@@ -397,10 +397,10 @@ narrower version: which rule, which requirement, which retention.
 ### Status is a snapshot, not a monitor
 
 `sweep status` prints one screen and exits. It reads `/proc`, `statvfs`, the
-package cache and the operation log, and it writes nothing at all — no state
-file, no lock, no log row, so it is safe to put in a shell prompt or run every
-minute from a timer if you want to. It is not a daemon, it keeps no history, and
-it has no alerts.
+package cache, the operation log and the user unit directory, and it writes
+nothing at all — no state file, no lock, no log row, so it is safe to put in a
+shell prompt or run every minute from a timer if you want to. It is not a daemon,
+it keeps no history, and it has no alerts.
 
 Every row is either a number or `— not available`. A row that cannot be measured
 says so instead of printing a plausible zero: a tree the walk could not finish
@@ -414,6 +414,14 @@ with its size, and `clean` empties it as part of the same plan: each payload goe
 with the `.trashinfo` record that names it, so nothing is left offering a restore
 that cannot work. `analyze` and `uninstall` are what put entries there in the
 first place, which is what keeps that step reviewable.
+
+One row reads configuration rather than counters. `user units` checks whether
+the program each `~/.config/systemd/user/*.service` starts still exists: a unit
+whose `ExecStart` is gone cannot start, and systemd says so only into a log. The
+row names the unit and `systemctl --user disable --now <unit>`, and disables
+nothing itself. A command holding a systemd specifier (`%h`) or a variable cannot
+be expanded from here, so that unit counts as not checkable instead of being
+reported as broken — a false alarm sends you to a unit that is fine.
 
 `--json` prints the same facts with stable field names, one document, for a
 script that should not parse the prose. The last-run row sums the newest session

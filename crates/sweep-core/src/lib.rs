@@ -45,6 +45,7 @@ pub mod scan;
 pub mod selection;
 pub mod sys;
 pub mod trash;
+pub mod units;
 pub mod validate;
 pub mod version;
 

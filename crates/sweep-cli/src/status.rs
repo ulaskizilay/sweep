@@ -18,7 +18,7 @@ use sweep_core::oplog::rfc3339;
 use sweep_core::paths::Xdg;
 use sweep_core::probe::RealProbe;
 use sweep_core::scan::{self, Limits, Select, Spec};
-use sweep_core::{sys, FsProbe};
+use sweep_core::{sys, units, FsProbe};
 
 use crate::format::{human_bytes, human_count, percent};
 
@@ -101,6 +101,7 @@ fn gather() -> Result<Report, String> {
     findings.push(load_finding());
     findings.extend(package_findings(&limits, &probe));
     findings.push(trash_finding(&xdg, &limits, &probe));
+    findings.push(systemd_finding(&xdg));
     findings.push(last_run_finding(&xdg));
 
     Ok(Report {
@@ -336,6 +337,91 @@ fn trash_finding(xdg: &Xdg, limits: &Limits, probe: &dyn FsProbe) -> Finding {
             next: None,
             unavailable: None,
         },
+    }
+}
+
+/// Orphaned systemd user units.
+///
+/// A unit whose `ExecStart` names a program the machine no longer has cannot
+/// start, and systemd reports that only into a log nobody reads. This row is the
+/// one place `status` reads user configuration, and it still changes nothing: a
+/// unit file is a decision about what starts at login, not a cache, so the row
+/// names the unit and the command rather than acting on either.
+///
+/// "Unknown" is counted separately and never becomes a finding. A command with a
+/// systemd specifier or a variable in it cannot be resolved from here, and a
+/// false alarm costs the user a trip to a unit that is fine.
+fn systemd_finding(xdg: &Xdg) -> Finding {
+    let root = xdg.config.join("systemd/user");
+    let path_env = std::env::var_os("PATH");
+    let report = units::scan(&root, path_env.as_deref());
+
+    if report.missing {
+        return Finding {
+            id: "systemd.user-units",
+            label: "user units",
+            state: State::Info,
+            value: String::new(),
+            next: None,
+            unavailable: Some(format!("{} is not present", root.display())),
+        };
+    }
+    if report.unreadable {
+        return Finding {
+            id: "systemd.user-units",
+            label: "user units",
+            state: State::Info,
+            value: String::new(),
+            next: None,
+            unavailable: Some(format!("{} is not readable", root.display())),
+        };
+    }
+
+    if report.orphaned.is_empty() {
+        // `unresolved` is not a problem to fix, but it is also not proof that
+        // the unit works, so the row does not claim it does.
+        let value = if report.total == 0 {
+            "none installed".to_string()
+        } else if report.unresolved == 0 {
+            format!(
+                "{}, every program present",
+                plural(report.total as u64, "unit", "units")
+            )
+        } else {
+            format!(
+                "{}, {} not checkable",
+                plural(report.total as u64, "unit", "units"),
+                report.unresolved
+            )
+        };
+        return Finding {
+            id: "systemd.user-units",
+            label: "user units",
+            state: State::Ok,
+            value,
+            next: None,
+            unavailable: None,
+        };
+    }
+
+    let first = &report.orphaned[0];
+    let value = if report.orphaned.len() == 1 {
+        format!("{} names a missing program", first.unit)
+    } else {
+        format!(
+            "{} of {} units name a missing program, starting with {}",
+            report.orphaned.len(),
+            report.total,
+            first.unit
+        )
+    };
+    Finding {
+        id: "systemd.user-units",
+        label: "user units",
+        state: State::Attention,
+        value,
+        next: Some(format!("systemctl --user disable --now {}", first.unit)),
+        unavailable: None,
     }
 }
 

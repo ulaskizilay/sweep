@@ -17,8 +17,9 @@
 # larger than 1 MiB so noise does not drown the report. If the evidence is
 # incomplete the line is "possible orphan, needs review" and nothing is deleted.
 #
-# Orphaned systemd units are reported only. A unit file is not a cache, and
-# `systemctl disable` is not a cleanup operation.
+# Orphaned systemd user units are reported by `sweep status`, not by a rule. A
+# unit file is a few hundred bytes rather than a cache, and `systemctl --user
+# disable` is a decision about what starts at login, not a cleanup operation.
 
 [meta]
 name = "orphans"

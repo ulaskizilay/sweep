@@ -1530,6 +1530,7 @@ fn status_is_read_only_and_reports_the_last_applied_run() {
         "pacman.cache",
         "pacman.orphans",
         "trash",
+        "systemd.user-units",
         "last.run",
     ] {
         assert!(ids.contains(&id), "status must report {id}: {ids:?}");
@@ -1553,6 +1554,68 @@ fn status_is_read_only_and_reports_the_last_applied_run() {
         "health is a two-value verdict: {}",
         report["health"]
     );
+}
+
+#[test]
+fn status_names_an_orphaned_user_unit_and_the_command_that_retires_it() {
+    let home = home();
+    let binary = home.path().join("bin/real-program");
+    std::fs::create_dir_all(binary.parent().unwrap()).expect("mkdir");
+    std::fs::write(&binary, b"#!/bin/sh\n").expect("write");
+
+    write(
+        home.path(),
+        ".config/systemd/user/gone.service",
+        "[Service]\nExecStart=/nonexistent/sweep-test-program\n",
+    );
+    write(
+        home.path(),
+        ".config/systemd/user/present.service",
+        &format!("[Service]\nExecStart={}\n", binary.display()),
+    );
+
+    let output = run_in(home.path(), &["status", "--json"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("one document");
+    let row = report["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .find(|finding| finding["id"] == "systemd.user-units")
+        .expect("the row is always present");
+
+    assert_eq!(row["state"], "attention", "{row}");
+    assert!(
+        row["value"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("gone.service"),
+        "the row must name the unit that cannot start: {row}"
+    );
+    assert_eq!(
+        row["next"], "systemctl --user disable --now gone.service",
+        "a finding without the command that acts on it is a dashboard row: {row}"
+    );
+
+    // The row is read-only like the rest of status: nothing below HOME changes.
+    let before = snapshot(home.path());
+    let again = run_in(home.path(), &["status"]);
+    assert_eq!(again.code, Some(0), "stderr: {}", again.stderr);
+    assert_eq!(before, snapshot(home.path()), "status writes nothing");
+
+    // A machine with no unit directory is "not available", not a finding.
+    let empty = tempfile::tempdir().expect("tempdir");
+    let quiet = run_in(empty.path(), &["status", "--json"]);
+    assert_eq!(quiet.code, Some(0), "stderr: {}", quiet.stderr);
+    let report: serde_json::Value = serde_json::from_str(&quiet.stdout).expect("one document");
+    let row = report["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .find(|finding| finding["id"] == "systemd.user-units")
+        .expect("the row is always present");
+    assert_eq!(row["state"], "info", "{row}");
+    assert!(row["unavailable"].is_string(), "{row}");
 }
 
 // ------------------------------------------------------------------ aur ---
