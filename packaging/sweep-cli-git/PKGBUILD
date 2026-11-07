@@ -10,7 +10,11 @@
 # the stable package a moving source.
 
 pkgname=sweep-cli-git
-pkgver=r20.2739763
+# `pkgver()` replaces this at build time. The static value only has to be a
+# valid version string, and it used to look like a real build (`r20.2739763`)
+# long after that was true; a placeholder that cannot be mistaken for one is
+# better than a number that is simply stale.
+pkgver=r0.g0000000
 pkgrel=1
 pkgdesc='Terminal cleanup and maintenance for Arch Linux'
 arch=('x86_64' 'aarch64')
