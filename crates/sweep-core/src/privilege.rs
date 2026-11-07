@@ -191,7 +191,7 @@ pub fn system_rule_ids() -> BTreeSet<String> {
 }
 
 fn is_literal_root(raw: &str) -> bool {
-    raw.starts_with('/') && !raw.contains('{')
+    raw.starts_with('/') && !raw.contains('{') && !raw.contains('*') && !raw.contains('?')
 }
 
 /// An `Xdg` whose only meaningful job is to satisfy the constructor.

@@ -115,6 +115,45 @@ whole path segment:
 `/home/alice.cargo`, which is almost always a typo and invisible when reading
 the file. `..` is refused for the same reason.
 
+### Versioned roots
+
+A segment may contain `*` or `?`, because some tools put the version in the
+directory name:
+
+```toml
+root = "{cache}/Google/AndroidStudio*"   # Android Studio, one directory per version
+root = "{home}/.var/app/*/cache"         # each Flatpak app's XDG cache
+root = "{home}/snap/*/*/.cache"          # each snap revision's XDG cache
+```
+
+The language is the one `exclude` uses, minus `**`: a root is expanded by
+listing directories, so a recursive wildcard would mean a walk with no depth
+bound. `[` and `]` are not special.
+
+Expansion lists the literal prefix, keeps entries whose name matches and that
+are real directories, and repeats for the next segment. A symlink is skipped,
+never followed: `~/snap/<app>/current` is a link into a revision directory, and
+resolving it would let a link outside the tree choose the target. A path that is
+not a directory when expansion finishes is absent, not a target. More than 64
+matches is an error and the rule plans nothing: that is a pattern that reached
+too high, not a cache layout.
+
+Four load-time checks keep the mechanism narrow (`root_glob`):
+
+- the last segment must contain literal text (`AndroidStudio*` passes,
+  `{home}/.var/app/*` does not);
+- the literal prefix must be at least three components deep, so `{home}/*/cache`
+  is refused;
+- only `dir-sweep`, `dir-age`, `tool-cache`, `file-pattern` and `report-only`
+  read a root this way;
+- `privilege = "root"` needs a literal root, because the elevated child
+  re-derives its allowlist and will not accept a pattern.
+
+Every matched directory is a concrete root: it becomes an allowed root, and it
+joins the claim set the blanket cache sweep must not enter. A rule with three
+matched versions is still one report row; the counters add up, and an incomplete
+scan of any one directory keeps that directory out of the plan.
+
 ## Kinds
 
 | Kind | Deletes | Retention |
@@ -234,7 +273,7 @@ Every check below applies to the built-in packs and to the overlay equally.
 | `bad_id` | the id is empty, longer than 64 bytes, or has a character outside `[a-z0-9._-]` |
 | `duplicate_id` | the id already exists — including a built-in id, so the overlay cannot replace one |
 | `unknown_section` | the section is not one of the sixteen |
-| `unknown_kind` | the kind is not one of the eight |
+| `unknown_kind` | the kind is not one of the nine |
 | `unsupported_kind` | the kind exists but is not implemented yet (`if-missing-owner`) |
 | `bad_privilege` | the value is neither `user` nor `root` |
 | `template` | the root is relative, empty, contains `..` or a control byte, mixes a variable with text, or names an unknown variable |
@@ -254,6 +293,7 @@ Every check below applies to the built-in packs and to the overlay equally.
 | `trash_layout` | `kind = "trash-empty"` with a root other than `{data}/Trash`, a non-zero `keep_days`, a `max_depth`, a `pattern`, an `exclude`, or `privilege = "root"` |
 | `requirement` | a `requires` entry is not `bin:<name>` or `dir:<path>` |
 | `bad_depth` | `max_depth` is 0 or greater than 32 |
+| `root_glob` | a root contains a wildcard and breaks one of the four versioned-root rules above |
 
 Two of these carry a wider meaning:
 

@@ -19,7 +19,7 @@ pub mod template;
 
 pub use check::{RuleError, RuleErrorKind};
 pub use glob::{Pattern, PatternError};
-pub use template::{Base, Template, TemplateError};
+pub use template::{Base, ExpandError, Template, TemplateError};
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -323,6 +323,12 @@ impl Requirement {
             }
             "dir" => {
                 let template = Template::parse(value).map_err(|error| error.to_string())?;
+                if template.has_glob() {
+                    return Err(format!(
+                        "requirement {raw:?} uses a wildcard; a requirement names one directory \
+                         that must exist, so a glob would never have a stable answer"
+                    ));
+                }
                 Ok(Requirement::Dir(template))
             }
             "pkg" => Err(
@@ -400,6 +406,16 @@ pub struct Rule {
 impl Rule {
     pub fn expanded_root(&self, xdg: &Xdg) -> PathBuf {
         self.root.expand(xdg)
+    }
+
+    /// Every directory this rule's root names.
+    ///
+    /// A literal root has one answer; a glob root has as many as there are
+    /// matching version directories, and an error when the pattern cannot be
+    /// resolved completely. Callers must treat `Err` as "unknown" and plan
+    /// nothing from this rule.
+    pub fn expanded_roots(&self, xdg: &Xdg) -> Result<Vec<PathBuf>, ExpandError> {
+        self.root.expand_all(xdg)
     }
 
     /// Files older than this instant are candidates. `keep_days = 0` means
@@ -582,7 +598,7 @@ impl RuleSet {
             .filter(|rule| sections.is_empty() || sections.contains(&rule.section))
             .collect();
         selected.sort_by_key(|rule| {
-            let depth = rule.expanded_root(xdg).components().count();
+            let depth = rule.root.literal_prefix(xdg).components().count();
             // Descending depth: sort by the negated depth, then by id for a
             // deterministic order.
             (std::cmp::Reverse(depth), rule.id.clone())
@@ -783,7 +799,7 @@ enabled = false
         let xdg = xdg();
         let set = RuleSet::from_sources(&builtin::sources(), &xdg).expect("builtins load");
         for rule in set.rules() {
-            let root = rule.expanded_root(&xdg);
+            let root = rule.root.literal_prefix(&xdg);
             assert!(root.is_absolute(), "{} -> {}", rule.id, root.display());
             assert!(
                 !root

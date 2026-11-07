@@ -885,24 +885,31 @@ fn build(
         .copied()
         .filter(|rule| rule.enabled && rule.kind.deletes())
         .collect();
+    // A glob root becomes as many concrete directories as it matches. An
+    // expansion error means "unknown", so that rule contributes no allowed root
+    // and is reported as an incomplete scan below instead of being planned.
     let allowed: Vec<AllowedRoot> = deleting
         .iter()
-        .map(|rule| {
-            let mut root =
-                AllowedRoot::new(rule.expanded_root(xdg)).pinned_to_current_device(mounts);
-            // A tool cache owns its directory: the sweep removes the root too.
-            root.allow_root_itself = rule.kind == Kind::ToolCache;
-            // A system rule only ever removes files owned by root, whoever is
-            // asking. The elevated child re-applies the same expectation.
-            if rule.privilege == Privilege::Root {
-                root = root.owned_by_root();
-            }
-            root
+        .flat_map(|rule| {
+            rule.expanded_roots(xdg)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|path| {
+                    let mut root = AllowedRoot::new(path).pinned_to_current_device(mounts);
+                    // A tool cache owns its directory: the sweep removes the root too.
+                    root.allow_root_itself = rule.kind == Kind::ToolCache;
+                    // A system rule only ever removes files owned by root, whoever is
+                    // asking. The elevated child re-applies the same expectation.
+                    if rule.privilege == Privilege::Root {
+                        root = root.owned_by_root();
+                    }
+                    root
+                })
         })
         .collect();
     let roots: Vec<PathBuf> = deleting
         .iter()
-        .map(|rule| rule.expanded_root(xdg))
+        .flat_map(|rule| rule.expanded_roots(xdg).unwrap_or_default())
         .collect();
     // The claim set is the whole catalog, not this run's selection. A root
     // another rule names is off limits to the blanket sweep whatever the user
@@ -913,10 +920,14 @@ fn build(
     // `{cache}/lutris` alone because `app.lutris.cache` claimed a child of it,
     // while `clean --only user-essentials` planned the parent and would have
     // removed the GOG and Epic tokens stored at its root.
+    //
+    // A glob root claims every directory it currently matches. Those are the
+    // concrete targets the rule would take, so the blanket sweep must leave
+    // each one alone for the same reason it leaves a literal root alone.
     let claims: Vec<PathBuf> = set
         .rules()
         .iter()
-        .map(|rule| rule.expanded_root(xdg))
+        .flat_map(|rule| rule.expanded_roots(xdg).unwrap_or_default())
         .collect();
 
     let ctx = ValidateCtx {
@@ -948,17 +959,37 @@ fn build(
     let mut notes: Vec<String> = Vec::new();
 
     for rule in &selected {
-        let root = rule.expanded_root(xdg);
-        match skip_reason(rule, xdg, &sections) {
-            Some(status) => runs.push(base_run(
+        if let Some(status) = skip_reason(rule, xdg, &sections) {
+            runs.push(base_run(
                 rule,
                 status,
                 skip_detail(command, rule, xdg, status),
-            )),
-            None => runs.push(execute(
-                rule, &root, probe, &ctx, limits, &mut plan, &claims, now,
-            )),
+            ));
+            continue;
         }
+        let roots = match rule.expanded_roots(xdg) {
+            Ok(roots) => roots,
+            Err(error) => {
+                // A pattern that cannot be resolved completely is an unknown,
+                // and unknown never deletes. The detail names the pattern
+                // rather than pretending the target is absent.
+                runs.push(base_run(
+                    rule,
+                    Status::ScanIncomplete,
+                    Some(error.to_string()),
+                ));
+                continue;
+            }
+        };
+        if roots.is_empty() {
+            runs.push(base_run(rule, Status::NotPresent, None));
+            continue;
+        }
+        let per_root: Vec<RuleRun> = roots
+            .iter()
+            .map(|root| execute(rule, root, probe, &ctx, limits, &mut plan, &claims, now))
+            .collect();
+        runs.push(merge_roots(rule, per_root));
     }
 
     plan.finish();
@@ -1217,6 +1248,69 @@ fn base_run(rule: &Rule, status: Status, detail: Option<String>) -> RuleRun {
         preserved: Vec::new(),
         detail,
     }
+}
+
+/// Combines the per-directory runs of one glob root into the single row the
+/// report prints.
+///
+/// A rule that matched three version directories is still one rule, so the
+/// counters add up and the status is the strongest answer any directory gave. A
+/// directory whose scan did not complete never turns the whole rule into a
+/// clean "planned": the detail says how many were skipped, and nothing from
+/// those directories is in the plan.
+fn merge_roots(rule: &Rule, runs: Vec<RuleRun>) -> RuleRun {
+    let total = runs.len();
+    let mut merged = base_run(rule, Status::Planned, None);
+    let first_status = runs
+        .first()
+        .map(|run| run.status)
+        .unwrap_or(Status::Planned);
+    let mut planned = 0;
+    let mut report_only = 0;
+    let mut incomplete = 0;
+    let mut unreadable = 0;
+    let mut empty = 0;
+
+    for run in runs {
+        merged.items += run.items;
+        merged.refused += run.refused;
+        merged.bytes = merged.bytes.saturating_add(run.bytes);
+        merged.scanned_bytes = merged.scanned_bytes.saturating_add(run.scanned_bytes);
+        merged.ignored += run.ignored;
+        merged.preserved.extend(run.preserved);
+        match run.status {
+            Status::Planned => planned += 1,
+            Status::ReportOnly => report_only += 1,
+            Status::ScanIncomplete => incomplete += 1,
+            Status::Unreadable => unreadable += 1,
+            Status::Empty => empty += 1,
+            _ => {}
+        }
+        if merged.detail.is_none() {
+            merged.detail = run.detail;
+        }
+    }
+
+    merged.status = if planned > 0 {
+        Status::Planned
+    } else if report_only > 0 {
+        Status::ReportOnly
+    } else if incomplete > 0 {
+        Status::ScanIncomplete
+    } else if unreadable > 0 {
+        Status::Unreadable
+    } else if empty > 0 {
+        Status::Empty
+    } else {
+        first_status
+    };
+    if incomplete > 0 {
+        merged.detail = Some(format!(
+            "{incomplete} of {total} matched directories could not be scanned completely; \
+             nothing from those directories is planned"
+        ));
+    }
+    merged
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1807,6 +1901,11 @@ fn plan_candidates<I, P>(
     I: IntoIterator<Item = P>,
     P: AsRef<Path>,
 {
+    // `Plan::items` is the whole plan, and a glob root runs this function once
+    // per matched directory. Summing every item with this rule id would count
+    // the earlier directories again on each call, so only the tail added here
+    // belongs to this run.
+    let before = plan.items().len();
     for path in candidates {
         match plan.push(path.as_ref(), &rule.id, ctx) {
             Ok(_) => run.items += 1,
@@ -1814,8 +1913,7 @@ fn plan_candidates<I, P>(
         }
     }
 
-    run.bytes = plan
-        .items()
+    run.bytes = plan.items()[before..]
         .iter()
         .filter(|item| item.rule() == &rule.id)
         .map(|item| item.bytes())

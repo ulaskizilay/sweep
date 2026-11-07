@@ -52,6 +52,12 @@ impl Selection {
     /// system pack with a synthetic `$HOME` and only accepts literal roots, so
     /// in that path expansion is the identity function.
     pub fn derive(rule: &Rule, xdg: &Xdg, now: i64, limits: &Limits, probe: &dyn FsProbe) -> Self {
+        // This answer is consumed by the elevated child, which only accepts
+        // literal system roots, and by tests. A glob root has many concrete
+        // roots and no single walk to derive; refusing is the honest answer.
+        if rule.root.has_glob() {
+            return Self::default();
+        }
         let root = rule.expanded_root(xdg);
         match rule.kind {
             // The two scanners decide over the whole root at once: a version's

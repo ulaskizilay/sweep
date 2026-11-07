@@ -59,7 +59,7 @@ fn every_deleting_rule_explains_why_it_is_safe() {
 fn no_deleting_rule_resolves_into_a_protected_root() {
     let xdg = xdg();
     for rule in catalog().rules() {
-        let root = rule.expanded_root(&xdg);
+        let root = rule.root.literal_prefix(&xdg);
         assert!(root.is_absolute(), "{} -> {}", rule.id, root.display());
         assert!(
             !root
@@ -341,7 +341,7 @@ fn the_catalog_digest_is_unchanged() {
 
     // Update this value in the same commit as the rule change, so the review
     // diff shows the catalog moved on purpose.
-    const EXPECTED: u64 = 0x5742_b5a1_6c30_afb5;
+    const EXPECTED: u64 = 0xb7d7_afa6_3bdb_8512;
     assert_eq!(
         format!("{hash:016x}"),
         format!("{EXPECTED:016x}"),

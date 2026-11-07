@@ -464,10 +464,10 @@ privilege = "user"
 # and are not touched either.
 #
 # Android Studio uses the same layout under a different root,
-# ~/.cache/Google/AndroidStudio<version>, which this rule does not reach. A rule
-# root is a fixed template, so a versioned directory cannot be named; that gap is
-# recorded rather than papered over with a `{cache}/Google` root that would take
-# whatever else Google writes there.
+# ~/.cache/Google/AndroidStudio<version>. The version is part of the directory
+# name, so the rule below matches it with a pattern rather than naming one
+# version; the rest of ~/.cache/Google is not touched. Settings, plugins and the
+# SDK live under ~/.config/Google and ~/Android, and no project data is here.
 [[rule]]
 id = "dev.jetbrains.cache"
 section = "dev-tools"
@@ -478,6 +478,16 @@ evidence = "Indexes, caches and logs are rebuilt from the project; the LocalHist
 recoverable = true
 keep_days = 0
 requires = ["dir:{cache}/JetBrains"]
+privilege = "user"
+
+[[rule]]
+id = "dev.android-studio.cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{cache}/Google/AndroidStudio*"
+evidence = "Per-version IDE indexes, caches and logs; Android Studio rebuilds them on the next open, and projects, settings and the SDK live elsewhere."
+recoverable = true
+keep_days = 0
 privilege = "user"
 
 # Neovim state (shada, swap, undo) lives in ~/.local/state/nvim, which is not a

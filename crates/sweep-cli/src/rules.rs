@@ -229,7 +229,7 @@ fn build(set: &RuleSet, xdg: &Xdg) -> ListReport {
             recoverable: rule.recoverable,
             privilege: rule.privilege.as_str(),
             root: rule.root.raw().to_string(),
-            resolved_root: rule.expanded_root(xdg).display().to_string(),
+            resolved_root: rule.root.display(xdg),
             requires: rule
                 .requires
                 .iter()

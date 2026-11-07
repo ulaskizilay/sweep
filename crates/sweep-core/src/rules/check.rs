@@ -57,6 +57,7 @@ pub enum RuleErrorKind {
     Requirement,
     BadDepth,
     TrashLayout,
+    RootGlob,
 }
 
 impl RuleErrorKind {
@@ -88,6 +89,7 @@ impl RuleErrorKind {
             RuleErrorKind::Requirement => "requirement",
             RuleErrorKind::BadDepth => "bad_depth",
             RuleErrorKind::TrashLayout => "trash_layout",
+            RuleErrorKind::RootGlob => "root_glob",
         }
     }
 }
@@ -202,7 +204,64 @@ pub fn compile(raw: RawRule, pack: &str, xdg: &Xdg) -> Result<Rule, RuleError> {
             error.to_string(),
         )
     })?;
-    let expanded = template.expand(xdg);
+    let expanded = template.literal_prefix(xdg);
+
+    // A wildcard in a root is a small mechanism with a narrow job: versioned
+    // cache directories such as `~/.cache/Google/AndroidStudio<version>`. These
+    // four checks are what keep it from becoming "delete everything below here".
+    // The last segment must name a target, the literal prefix must be deep
+    // enough that the wildcard is not the first thing below `$HOME`, the kind
+    // must be one that walks a directory, and the elevated child must never see
+    // a pattern it cannot re-derive.
+    if template.has_glob() {
+        if !matches!(
+            kind,
+            Kind::DirSweep | Kind::DirAge | Kind::ToolCache | Kind::FilePattern | Kind::ReportOnly
+        ) {
+            return Err(fail(
+                RuleErrorKind::RootGlob,
+                pack,
+                Some(&label),
+                format!(
+                    "kind = \"{kind}\" reads one fixed layout, so root {root:?} cannot be a pattern"
+                ),
+            ));
+        }
+        if !template.last_segment_has_literal() {
+            return Err(fail(
+                RuleErrorKind::RootGlob,
+                pack,
+                Some(&label),
+                format!(
+                    "root {root:?} ends in a wildcard; name the directory the rule takes, not \
+                     every child of a parent"
+                ),
+            ));
+        }
+        if depth(&expanded) < 3 {
+            return Err(fail(
+                RuleErrorKind::RootGlob,
+                pack,
+                Some(&label),
+                format!(
+                    "root {root:?} expands from {}; a wildcard needs a literal prefix at least \
+                     three components deep",
+                    expanded.display()
+                ),
+            ));
+        }
+        if privilege == Privilege::Root {
+            return Err(fail(
+                RuleErrorKind::RootGlob,
+                pack,
+                Some(&label),
+                format!(
+                    "root {root:?} is a pattern; privilege = \"root\" needs a literal root the \
+                     elevated child can re-derive"
+                ),
+            ));
+        }
+    }
 
     // Patterns are compiled before the root checks because the one home-rooted
     // shape that is allowed depends on what the patterns can match.
@@ -758,6 +817,55 @@ privilege = "user"
     }
 
     #[test]
+    fn a_versioned_glob_root_loads() {
+        let body = base("dev.example.versioned")
+            .replace("{cache}/example", "{cache}/Google/AndroidStudio*");
+        let set = one(&body).expect("loads");
+        assert!(set.rules()[0].root.has_glob());
+    }
+
+    #[test]
+    fn a_glob_root_must_name_its_last_segment() {
+        for root in ["{home}/.var/app/*", "{home}/snap/*/*"] {
+            let body = base("dev.bad").replace("{cache}/example", root);
+            let error = first_error(one(&body));
+            assert_eq!(error.kind, RuleErrorKind::RootGlob, "{root}");
+            assert!(error.message.contains("every child"), "{}", error.message);
+        }
+    }
+
+    #[test]
+    fn a_glob_root_needs_a_deep_literal_prefix() {
+        let body = base("dev.bad").replace("{cache}/example", "{home}/*/cache");
+        let error = first_error(one(&body));
+        assert_eq!(error.kind, RuleErrorKind::RootGlob);
+        assert!(
+            error.message.contains("three components"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_glob_root_is_refused_for_a_kind_that_reads_one_layout() {
+        let body = base("dev.bad")
+            .replace("dir-age", "hf-cache")
+            .replace("{cache}/example", "{cache}/Google/AndroidStudio*");
+        let error = first_error(one(&body));
+        assert_eq!(error.kind, RuleErrorKind::RootGlob);
+    }
+
+    #[test]
+    fn a_glob_root_is_refused_for_the_elevated_child() {
+        let body = base("dev.bad")
+            .replace("section = \"dev-tools\"", "section = \"system\"")
+            .replace("privilege = \"user\"", "privilege = \"root\"")
+            .replace("{cache}/example", "{cache}/Google/AndroidStudio*");
+        let error = first_error(one(&body));
+        assert_eq!(error.kind, RuleErrorKind::RootGlob);
+    }
+
+    #[test]
     fn a_deleting_rule_needs_evidence() {
         let body = base("dev.bad").replace("evidence = \"regenerated by the tool\"", "");
         let error = first_error(one(&body));
@@ -980,6 +1088,7 @@ privilege = "root"
             RuleErrorKind::BadPattern,
             RuleErrorKind::Requirement,
             RuleErrorKind::BadDepth,
+            RuleErrorKind::RootGlob,
         ];
         let mut codes: Vec<&str> = kinds.iter().map(|kind| kind.code()).collect();
         let before = codes.len();

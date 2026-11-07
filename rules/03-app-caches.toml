@@ -224,3 +224,30 @@ recoverable = true
 keep_days = 0
 requires = ["dir:{cache}/opencode"]
 privilege = "user"
+
+# Flatpak and Snap give every app its own XDG cache outside ~/.cache:
+# ~/.var/app/<app-id>/cache for Flatpak, ~/snap/<app>/<revision>/.cache for Snap.
+# The pattern reaches only the cache directory. Flatpak's data, config and state
+# are siblings of `cache`, and Snap's shared `common` directory is a sibling of
+# the revision, so neither is named. Both rules are age-gated: an entry that has
+# not been touched for a month is not in use, which is the same test the XDG
+# cache base uses.
+[[rule]]
+id = "app.flatpak.cache"
+section = "app-caches"
+kind = "dir-age"
+root = "{home}/.var/app/*/cache"
+evidence = "Per-app XDG cache directories; app data and configuration live in sibling directories the pattern never names."
+recoverable = true
+keep_days = 30
+privilege = "user"
+
+[[rule]]
+id = "app.snap.cache"
+section = "app-caches"
+kind = "dir-age"
+root = "{home}/snap/*/*/.cache"
+evidence = "Per-revision XDG cache inside each snap; the shared common directory and the app's configuration are not named."
+recoverable = true
+keep_days = 30
+privilege = "user"

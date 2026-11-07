@@ -933,6 +933,142 @@ fn a_section_limited_run_does_not_widen_the_blanket_cache_sweep() {
 }
 
 #[test]
+fn a_versioned_cache_directory_is_found_by_the_builtin_rule() {
+    // Android Studio names its cache after the version, so the rule root is a
+    // pattern. The directory beside it is not part of the pattern and stays.
+    let home = home();
+    write(
+        home.path(),
+        ".cache/Google/AndroidStudio2024.2/caches/blob",
+        "index",
+    );
+    write(home.path(), ".cache/Google/Other/blob", "not ours");
+
+    let preview = run_in(
+        home.path(),
+        &["clean", "--dry-run", "--json", "--only", "dev-tools"],
+    );
+    assert_eq!(preview.code, Some(0), "stderr: {}", preview.stderr);
+    let report: serde_json::Value =
+        serde_json::from_str(&preview.stdout).expect("one JSON document");
+    let row = report["rules"]
+        .as_array()
+        .expect("rules")
+        .iter()
+        .find(|row| row["id"] == "dev.android-studio.cache")
+        .expect("the versioned rule is part of the section");
+    assert_eq!(
+        row["bytes"], row["scanned_bytes"],
+        "a rule that plans everything below its roots must not count a root twice: {row}"
+    );
+
+    let output = run_in(home.path(), &["clean", "--yes", "--only", "dev-tools"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    assert!(
+        !home
+            .path()
+            .join(".cache/Google/AndroidStudio2024.2/caches/blob")
+            .exists(),
+        "the matched version directory must be emptied"
+    );
+    assert!(
+        !home
+            .path()
+            .join(".cache/Google/AndroidStudio2024.2/caches")
+            .exists(),
+        "the cache subtree must be removed, not only its file"
+    );
+    assert!(
+        home.path().join(".cache/Google/Other/blob").exists(),
+        "the pattern must not reach a sibling"
+    );
+}
+
+#[test]
+fn the_blanket_sweep_does_not_take_a_glob_root_from_another_section() {
+    // A glob root claims every directory it currently matches, not just the
+    // literal text before the wildcard. Without that, `--only user-essentials`
+    // would hand `~/.cache/Google/AndroidStudio<version>` to the residual sweep.
+    let home = home();
+    for relative in [
+        ".cache/Google/AndroidStudio2024.2/blob",
+        ".cache/unknown-app/blob",
+    ] {
+        write(home.path(), relative, "cache");
+        age(&home.path().join(relative), 30);
+    }
+    for directory in [
+        ".cache",
+        ".cache/Google",
+        ".cache/Google/AndroidStudio2024.2",
+        ".cache/unknown-app",
+    ] {
+        age(&home.path().join(directory), 30);
+    }
+
+    let output = run_in(
+        home.path(),
+        &["clean", "--dry-run", "--json", "--only", "user-essentials"],
+    );
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    let report: serde_json::Value =
+        serde_json::from_str(&output.stdout).expect("one JSON document");
+    let residual = report["rules"]
+        .as_array()
+        .expect("rules")
+        .iter()
+        .find(|row| row["id"] == "user.cache.residual")
+        .expect("the residual sweep is part of the section");
+
+    assert_eq!(residual["items"], 2, "{residual}");
+    assert!(home
+        .path()
+        .join(".cache/Google/AndroidStudio2024.2")
+        .exists());
+}
+
+#[test]
+fn a_flatpak_cache_is_aged_but_its_data_directory_is_not() {
+    let home = home();
+    write(
+        home.path(),
+        ".var/app/com.example.App/cache/stale/blob",
+        "stale cache",
+    );
+    write(
+        home.path(),
+        ".var/app/com.example.App/data/keep",
+        "app data",
+    );
+    age(
+        &home
+            .path()
+            .join(".var/app/com.example.App/cache/stale/blob"),
+        60,
+    );
+    age(
+        &home.path().join(".var/app/com.example.App/cache/stale"),
+        60,
+    );
+
+    let output = run_in(home.path(), &["clean", "--yes", "--only", "app-caches"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    assert!(
+        !home
+            .path()
+            .join(".var/app/com.example.App/cache/stale")
+            .exists(),
+        "the stale cache subtree must be removed"
+    );
+    assert!(
+        home.path()
+            .join(".var/app/com.example.App/data/keep")
+            .exists(),
+        "the pattern names `cache`, never `data`"
+    );
+}
+
+#[test]
 fn clean_leaves_the_paths_the_ignore_file_protects() {
     let home = home();
     let kept = firefox_cache(home.path());
