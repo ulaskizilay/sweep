@@ -1,0 +1,119 @@
+# Publishes a release when a `V*` tag is pushed.
+#
+# The tag is the whole input. Everything else is derived: the version in the
+# binary, the archive name, the checksum file. A tag whose name disagrees with
+# the workspace version fails here rather than publishing a binary that calls
+# itself something else.
+#
+# This workflow has never run. It cannot be executed locally and the repository
+# is private, so the first tag is also its first test; `packaging/README.md`
+# keeps a manual path for exactly that reason.
+name: Release
+
+on:
+  push:
+    tags: ["V*"]
+
+# `contents: write` is what creating a release needs, and nothing else is asked
+# for. The default token in this repository can push code; a release job does
+# not need that.
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      # A tag is a claim that this commit is worth shipping. Running the suite
+      # here is the only thing that checks it: the CI run for the same commit may
+      # still be going, or may have been cancelled by a later push.
+      - name: The commit is green
+        run: cargo test --workspace --all-targets
+
+      - name: Build
+        run: cargo build --release --locked
+
+      # A tag that says V0.1.0 while the binary prints 0.2.0 publishes a lie, and
+      # the archive name is the only place anyone would notice.
+      - name: The tag and the binary agree
+        run: |
+          tag="${GITHUB_REF_NAME#V}"
+          built="$(./target/release/sweep --version | awk '{print $2}')"
+          if [ "$tag" != "$built" ]; then
+            echo "tag $GITHUB_REF_NAME says $tag, the binary says $built"
+            echo "bump [workspace.package] version, or retag"
+            exit 1
+          fi
+
+      # Man pages and completions come from the same `clap` definition the parser
+      # uses, so they are generated here rather than kept as files that can drift.
+      - name: Package
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#V}"
+          name="sweep-$version-x86_64-linux"
+          mkdir -p "dist/$name/bin" "dist/$name/share/man/man1" \
+            "dist/$name/share/bash-completion/completions" \
+            "dist/$name/share/zsh/site-functions" \
+            "dist/$name/share/fish/vendor_completions.d"
+
+          install -m755 target/release/sweep "dist/$name/bin/sweep"
+          install -m644 LICENSE README.md "dist/$name/"
+
+          ./target/release/sweep completions bash \
+            > "dist/$name/share/bash-completion/completions/sweep"
+          ./target/release/sweep completions zsh \
+            > "dist/$name/share/zsh/site-functions/_sweep"
+          ./target/release/sweep completions fish \
+            > "dist/$name/share/fish/vendor_completions.d/sweep.fish"
+
+          # One page per command, the same list the PKGBUILD installs.
+          page() {
+            local out=$1
+            shift
+            ./target/release/sweep __manpage "$@" > "dist/$name/share/man/man1/$out.1"
+          }
+          page sweep
+          page sweep-doctor doctor
+          page sweep-rules rules
+          page sweep-rules-list rules list
+          page sweep-rules-verify rules verify
+          page sweep-clean clean
+          page sweep-status status
+          page sweep-purge purge
+          page sweep-installer installer
+          page sweep-uninstall uninstall
+          page sweep-optimize optimize
+          page sweep-history history
+          page sweep-analyze analyze
+          page sweep-aur aur
+          page sweep-completions completions
+
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          rm -rf "dist/$name"
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum ./*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/*.tar.gz dist/SHA256SUMS
