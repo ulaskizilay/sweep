@@ -14,9 +14,12 @@
 # it. That is why each rule names one directory rather than its parent.
 #
 # The catalog lists the applications that appear on Arch desktops. Adding one is
-# one rule per cache directory. Flatpak's `~/.var/app/<id>/cache` layout and a
-# per-application section are not covered: both need discovery, and a rule root
-# is a fixed template rather than a glob.
+# one rule per cache directory. Flatpak's `~/.var/app/<id>/cache` layout is
+# covered by `app.flatpak.cache`, which names the `cache` child of every app
+# through a versioned root; it is age-gated because an app that has not run for
+# a month should not lose a cache it is about to reuse. A per-application
+# section would need a discovery step that produces rules, which the catalog
+# does not do: the section a rule declares is fixed at load time.
 #
 # Agent CLIs keep their state in a home dot-directory rather than an application
 # config directory, so their rules sit here too. Only the `cache` children are

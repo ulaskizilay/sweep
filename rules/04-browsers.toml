@@ -12,9 +12,11 @@
 #   Local Storage/, IndexedDB/, Session Storage/, History, Bookmarks,
 #   "Login Data", "Web Data", Sessions/
 #
-# Profile discovery is not needed for the cache trees, but it would be needed for
-# Flatpak (`~/.var/app/<id>/cache`) and for a per-profile breakdown. Neither is
-# covered: a rule root is a fixed template, not a glob.
+# Profile discovery is not needed for the cache trees, and it is still not done:
+# a per-profile breakdown would need one row per profile, which the catalog does
+# not produce. Flatpak's `~/.var/app/<id>/cache` is covered by
+# `app.flatpak.cache` in the app-caches pack, not here, because it is the app's
+# own XDG cache rather than a browser profile.
 #
 # The service worker cache is not a rule for the same reason, and it is the one
 # that looks most like a miss. It lives inside the profile

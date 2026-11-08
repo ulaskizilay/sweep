@@ -51,6 +51,10 @@ impl Selection {
     /// `xdg` is only consulted for a templated root. The child compiles the
     /// system pack with a synthetic `$HOME` and only accepts literal roots, so
     /// in that path expansion is the identity function.
+    ///
+    /// A glob root returns an empty, incomplete selection: it names several
+    /// concrete directories and this function has one walk to derive, so the
+    /// honest answer is "unknown". Nothing is deleted from an unknown.
     pub fn derive(rule: &Rule, xdg: &Xdg, now: i64, limits: &Limits, probe: &dyn FsProbe) -> Self {
         // This answer is consumed by the elevated child, which only accepts
         // literal system roots, and by tests. A glob root has many concrete

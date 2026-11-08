@@ -101,9 +101,12 @@ privilege = "user"
 # settings - lives under ~/.thunderbird and no rule touches it.
 #
 # A review once proposed narrowing this to `{cache}/thunderbird/*/cache2` on the
-# assumption that the cache base mixes profile state in. It does not, and the
-# narrowing is not expressible anyway: a rule root is a fixed template, not a
-# glob. Recorded so the question is not reopened without a measurement.
+# assumption that the cache base mixes profile state in. It does not. The
+# narrowing is expressible since versioned roots landed, and it would be worse:
+# `safebrowsing` and `startupCache` sit beside `cache2` in the same profile and
+# are rebuilt too, so the pattern would keep two caches per profile while looking
+# like a tightening. Recorded so the question is not reopened without a
+# measurement.
 [[rule]]
 id = "mail.thunderbird.cache"
 section = "cloud-office"

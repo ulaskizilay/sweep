@@ -123,7 +123,7 @@ sweep rules — 16 packs, 131 rules, 117 enabled
   system                 8        5
   user-essentials        6        6
   ...
-  dev-tools             43       43
+  dev-tools             44       44
   ...
   model-caches           3        3  opt-in
 
@@ -137,6 +137,7 @@ sweep rules — 16 packs, 131 rules, 117 enabled
     system.pacman.package-cache    pkg-cache    2v/7d  root  /var/cache/pacman/pkg
 
   dev-tools
+    dev.android-studio.cache       dir-sweep      now  on    /home/u/.cache/Google/AndroidStudio*
     dev.cargo.crate-cache          file-pattern   30d  on    /home/u/.cargo/registry/cache
     dev.go.build-cache             tool-cache     now  on    /home/u/.cache/go-build
 
@@ -158,6 +159,14 @@ months still has the archive of the kernel it is running. A version downloaded
 in the last `keep_days` is kept regardless: that is a downgrade in progress.
 On a stock Arch cache, `sweep clean --only system` planned the same 170 files,
 byte for byte, as `paccache -d -k2` when this was verified.
+
+A root segment may contain `*` or `?` when a tool puts its version in the
+directory name: `{cache}/Google/AndroidStudio*` is one rule that finds every
+installed version, and `{home}/.var/app/*/cache` is one rule that finds every
+Flatpak app's cache. The wildcard must end in literal text, its literal prefix
+must be at least three components deep, and it never applies to a rule that runs
+as root. Expansion lists real directories and skips symlinks, so a `current`
+link cannot choose the target.
 
 Rules that are wrong do not load: a root inside `/usr`, a duplicate id, a typo
 in a key. A user overlay at `~/.config/sweep/rules.d/*.toml` may add rules but
