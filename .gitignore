@@ -8,3 +8,6 @@
 !/fuzz/corpus/fuzz_rule_toml/
 /fuzz/artifacts
 /fuzz/Cargo.lock
+
+# Python bytecode from scripts/ probes.
+__pycache__/
