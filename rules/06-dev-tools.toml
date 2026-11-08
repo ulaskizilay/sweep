@@ -5,7 +5,8 @@
 # and "recoverable" are not the same thing:
 #
 #   A. Fetchable from a public index - cargo `.crate` files, pip, uv, yarn,
-#      ccache, nix-era build caches. Default: enabled, with a retention window.
+#      pub.dev archives, ccache, nix-era build caches. Default: enabled, with a
+#      retention window.
 #
 #   B. May need an account, a licence acceptance, or a network the machine does
 #      not have - Hugging Face, PyTorch hub checkpoints. Default: disabled and
@@ -25,7 +26,7 @@
 
 [meta]
 name = "dev-tools"
-description = "Language and build toolchain caches: cargo, Go, npm, pip, uv, JVM, ccache"
+description = "Language and build toolchain caches: cargo, Go, npm, pip, uv, pub, JVM, ccache"
 
 # Cargo's registry cache holds one `.crate` archive per published version.
 # Deleting an archive does not touch `registry/src`, so a project that already
@@ -118,6 +119,23 @@ evidence = "Bun's install cache; `bun install` downloads what it needs again."
 recoverable = true
 keep_days = 0
 requires = ["bin:bun"]
+privilege = "user"
+
+# Dart and Flutter keep one directory per downloaded package version under
+# `hosted/pub.dev`. The rule names that host, not `hosted` and not the cache
+# root: `hosted` can also hold a private pub server whose packages may need
+# credentials to fetch again, and `~/.pub-cache` holds `global_packages`
+# (activated executables) and `git` (pinned checkouts) beside the downloads.
+# `dart pub get` fetches a missing version from the public index again.
+[[rule]]
+id = "dev.pub.cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{home}/.pub-cache/hosted/pub.dev"
+evidence = "Downloaded pub.dev package archives; `dart pub get` fetches a missing version again."
+recoverable = true
+keep_days = 0
+requires = ["bin:dart"]
 privilege = "user"
 
 # pnpm's store is content-addressed and hardlinked into `node_modules`, so

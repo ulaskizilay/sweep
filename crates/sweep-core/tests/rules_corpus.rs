@@ -217,6 +217,17 @@ fn a_cache_root_that_holds_user_state_keeps_it() {
         "{cache}/lutris/installer",
         "the root holds .gog.token, .egs.token and one <save>.json per game"
     );
+
+    // Pub's cache root is several things in one directory. `hosted/pub.dev` is
+    // the public index and comes back with `dart pub get`; `global_packages`
+    // holds activated executables, `git` holds pinned checkouts, and `hosted`
+    // may also name a private server that needs credentials. Only the public
+    // host is a rule.
+    assert_eq!(
+        rule("dev.pub.cache").root.raw(),
+        "{home}/.pub-cache/hosted/pub.dev",
+        "the cache root also holds activated executables and git checkouts"
+    );
 }
 
 #[test]
@@ -341,7 +352,7 @@ fn the_catalog_digest_is_unchanged() {
 
     // Update this value in the same commit as the rule change, so the review
     // diff shows the catalog moved on purpose.
-    const EXPECTED: u64 = 0xb7d7_afa6_3bdb_8512;
+    const EXPECTED: u64 = 0x92ba_b1a8_cd4d_4100;
     assert_eq!(
         format!("{hash:016x}"),
         format!("{EXPECTED:016x}"),
