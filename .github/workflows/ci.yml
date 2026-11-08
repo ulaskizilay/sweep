@@ -196,3 +196,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Every relative markdown link resolves
         run: python3 scripts/check_links.py
+      - name: Maintainer scripts compile
+        run: python3 -m py_compile scripts/check_links.py scripts/probe_orphan_data.py
