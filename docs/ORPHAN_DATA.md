@@ -24,14 +24,14 @@ five seconds. On 8 November 2026 it found 79 directories of at least 1 MiB
 across the four XDG roots and `~/.var/app`; 25 had no owner evidence. They
 fall into three groups:
 
-1. **Real candidates.** `~/.cache/transcribe-venv` (7.2 GB),
-   `cursor-compile-cache` (182 MB), `prisma` (95 MB), `next-swc` (67 MB),
-   `node-gyp` (61 MB), `winetricks` (40 MB), `legendary` (6 MB).
+1. **Real candidates.** `~/.cache/transcribe-venv` (6.7 GiB),
+   `cursor-compile-cache` (174 MiB), `prisma` (91 MiB), `next-swc` (64 MiB),
+   `node-gyp` (58 MiB), `winetricks` (38 MiB), `legendary` (6.0 MiB).
 2. **Shared session caches.** `fontconfig`, `gtk-4.0`, `KDE`,
    `gstreamer-1.0`, `appstream`, `mesa_shader_cache`, `kactivitymanagerd`,
    `kdeconnect.app`, `logs`. They are not one application's data; removing
    them because no application "owns" them is a category error.
-3. **Library caches.** `huggingface` (6.9 GB) and `ms-playwright` (1.5 GB)
+3. **Library caches.** `huggingface` (6.5 GiB) and `ms-playwright` (1.5 GiB)
    have no desktop file and no command on `PATH`. They are already partly
    addressed by named rules (`model.huggingface.hub`) and exclusions; they
    are not orphan-detection targets.
