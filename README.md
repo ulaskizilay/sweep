@@ -580,6 +580,7 @@ exists precisely for that difference.
 | `fuzz/` | libFuzzer targets (nightly) |
 | `docs/SAFETY.md` | the safety contract |
 | `docs/RULES.md` | the rule schema, kinds and load-time refusals |
+| `docs/ORPHAN_DATA.md` | the design note for data whose application is gone |
 
 `unsafe` is denied crate-wide except in `sweep-core/src/sys`, where each block
 carries a `// SAFETY:` justification and wraps one syscall.
