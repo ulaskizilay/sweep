@@ -479,6 +479,20 @@ mod tests {
         .expect("home")
     }
 
+    /// A file whose `st_blocks` stays above the size floor on a filesystem with
+    /// transparent compression: a zero-filled file can shrink to nothing.
+    fn write_blob(path: &Path) {
+        let mut blob = vec![0u8; 2 * 1024 * 1024];
+        let mut state = 0x9e37_79b9u32;
+        for byte in &mut blob {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            *byte = state as u8;
+        }
+        std::fs::write(path, blob).expect("write");
+    }
+
     #[test]
     fn a_rule_root_above_the_candidate_is_not_evidence() {
         let candidate = Path::new("/home/u/.cache/SomeApp");
@@ -553,7 +567,7 @@ mod tests {
         let home = temp.path();
         let cache = home.join(".cache/GoneApp");
         std::fs::create_dir_all(&cache).expect("mkdir");
-        std::fs::write(cache.join("blob"), vec![0u8; 2 * 1024 * 1024]).expect("write");
+        write_blob(&cache.join("blob"));
 
         let probe = RealProbe::new().expect("probe");
         let report = scan(&xdg_at(home), &probe);
@@ -580,7 +594,7 @@ mod tests {
         // when it is empty and nothing else on the machine names it.
         let cache = home.join(".cache/uv");
         std::fs::create_dir_all(&cache).expect("mkdir");
-        std::fs::write(cache.join("blob"), vec![0u8; 2 * 1024 * 1024]).expect("write");
+        write_blob(&cache.join("blob"));
 
         let probe = RealProbe::new().expect("probe");
         let report = scan(&xdg_at(home), &probe);

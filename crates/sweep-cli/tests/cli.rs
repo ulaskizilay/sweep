@@ -463,6 +463,20 @@ fn write(root: &Path, relative: &str, body: &str) {
     std::fs::write(&path, body).expect("write");
 }
 
+/// A file whose `st_blocks` stays above the size floor on a filesystem with
+/// transparent compression: a zero-filled file can shrink to nothing.
+fn write_blob(path: &Path) {
+    let mut blob = vec![0u8; 2 * 1024 * 1024];
+    let mut state = 0x9e37_79b9u32;
+    for byte in &mut blob {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        *byte = state as u8;
+    }
+    std::fs::write(path, blob).expect("write");
+}
+
 /// Every path below `root`, sorted.
 ///
 /// Used as a before/after fingerprint: a dry run may not create, remove or
@@ -1888,7 +1902,7 @@ fn status_reports_a_cache_directory_nothing_names_without_offering_to_delete_it(
     let home = home();
     let cache = home.path().join(".cache/GoneApp");
     std::fs::create_dir_all(&cache).expect("mkdir");
-    std::fs::write(cache.join("blob"), vec![0u8; 2 * 1024 * 1024]).expect("write");
+    write_blob(&cache.join("blob"));
 
     let output = run_in(home.path(), &["status", "--json"]);
     assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
