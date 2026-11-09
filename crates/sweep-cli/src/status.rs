@@ -21,6 +21,7 @@ use sweep_core::scan::{self, Limits, Select, Spec};
 use sweep_core::{sys, units, FsProbe};
 
 use crate::format::{human_bytes, human_count, percent};
+use crate::orphan_cache::{self, Report as OrphanReport};
 
 /// How a row should be read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -100,6 +101,7 @@ fn gather() -> Result<Report, String> {
     findings.push(memory_finding());
     findings.push(load_finding());
     findings.extend(package_findings(&limits, &probe));
+    findings.push(orphan_cache_finding(&xdg, &probe));
     findings.push(trash_finding(&xdg, &limits, &probe));
     findings.push(systemd_finding(&xdg));
     findings.push(last_run_finding(&xdg));
@@ -306,6 +308,75 @@ fn package_findings(limits: &Limits, probe: &dyn FsProbe) -> Vec<Finding> {
         }),
     }
     findings
+}
+
+/// Cache directories nothing on the machine still names.
+///
+/// This row is report-only: no sweep command deletes an orphan cache, so there
+/// is no `next`. The evidence model and the measurement live in `orphan_cache`;
+/// this function only turns the outcome into a row.
+fn orphan_cache_finding(xdg: &Xdg, probe: &dyn FsProbe) -> Finding {
+    match orphan_cache::scan(xdg, probe) {
+        OrphanReport::Absent => Finding {
+            id: "orphan.cache",
+            label: "orphan cache",
+            state: State::Info,
+            value: "none found".to_string(),
+            next: None,
+            unavailable: None,
+        },
+        OrphanReport::Unavailable(reason) => Finding {
+            id: "orphan.cache",
+            label: "orphan cache",
+            state: State::Info,
+            value: String::new(),
+            next: None,
+            unavailable: Some(reason.to_string()),
+        },
+        OrphanReport::Found {
+            candidates,
+            complete,
+        } => {
+            if candidates.is_empty() {
+                return Finding {
+                    id: "orphan.cache",
+                    label: "orphan cache",
+                    state: State::Info,
+                    value: if complete {
+                        "none found".to_string()
+                    } else {
+                        "not measured within the time budget".to_string()
+                    },
+                    next: None,
+                    unavailable: None,
+                };
+            }
+            let bytes: u64 = candidates.iter().map(|candidate| candidate.bytes).sum();
+            let largest = &candidates[0];
+            let count = plural(candidates.len() as u64, "directory", "directories");
+            let value = if complete {
+                format!(
+                    "{} in {count}, largest {}",
+                    human_bytes(bytes),
+                    largest.name
+                )
+            } else {
+                format!(
+                    "at least {} in {count}, largest {}",
+                    human_bytes(bytes),
+                    largest.name
+                )
+            };
+            Finding {
+                id: "orphan.cache",
+                label: "orphan cache",
+                state: State::Info,
+                value,
+                next: None,
+                unavailable: None,
+            }
+        }
+    }
 }
 
 fn trash_finding(xdg: &Xdg, limits: &Limits, probe: &dyn FsProbe) -> Finding {

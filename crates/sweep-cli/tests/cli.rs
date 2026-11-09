@@ -661,6 +661,27 @@ fn a_broken_user_overlay_is_refused_by_rules_and_by_clean() {
         "a refused clean must not print a plan: {:?}",
         clean.stdout
     );
+
+    // `status` is a health snapshot, not a catalog gate: a broken overlay
+    // makes the orphan row unavailable, but the other rows still print and the
+    // command still succeeds.
+    std::fs::create_dir_all(home.path().join(".cache")).expect("mkdir");
+    let status = run_in(home.path(), &["status", "--json"]);
+    assert_eq!(status.code, Some(0), "stderr: {}", status.stderr);
+    let report: serde_json::Value = serde_json::from_str(&status.stdout).expect("one document");
+    let row = report["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .find(|finding| finding["id"] == "orphan.cache")
+        .expect("the row is always present");
+    assert!(
+        row["unavailable"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("did not compile"),
+        "the row says why it cannot decide: {row}"
+    );
 }
 
 // ----------------------------------------------------------------- clean ---
@@ -1772,6 +1793,7 @@ fn status_is_read_only_and_reports_the_last_applied_run() {
         "load",
         "pacman.cache",
         "pacman.orphans",
+        "orphan.cache",
         "trash",
         "systemd.user-units",
         "last.run",
@@ -1859,6 +1881,46 @@ fn status_names_an_orphaned_user_unit_and_the_command_that_retires_it() {
         .expect("the row is always present");
     assert_eq!(row["state"], "info", "{row}");
     assert!(row["unavailable"].is_string(), "{row}");
+}
+
+#[test]
+fn status_reports_a_cache_directory_nothing_names_without_offering_to_delete_it() {
+    let home = home();
+    let cache = home.path().join(".cache/GoneApp");
+    std::fs::create_dir_all(&cache).expect("mkdir");
+    std::fs::write(cache.join("blob"), vec![0u8; 2 * 1024 * 1024]).expect("write");
+
+    let output = run_in(home.path(), &["status", "--json"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("one document");
+    let row = report["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .find(|finding| finding["id"] == "orphan.cache")
+        .expect("the row is always present");
+
+    assert_eq!(
+        row["state"], "info",
+        "a report-only row is never attention: {row}"
+    );
+    assert!(
+        row["value"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("GoneApp"),
+        "the row names the largest directory: {row}"
+    );
+    assert!(
+        row.get("next").is_none(),
+        "no command deletes orphan data, so there is no next step: {row}"
+    );
+
+    // The row is read-only: nothing below HOME changes.
+    let before = snapshot(home.path());
+    let again = run_in(home.path(), &["status"]);
+    assert_eq!(again.code, Some(0), "stderr: {}", again.stderr);
+    assert_eq!(before, snapshot(home.path()), "status writes nothing");
 }
 
 // ------------------------------------------------------------------ aur ---

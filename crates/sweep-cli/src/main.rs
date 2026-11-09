@@ -11,6 +11,7 @@ mod doctor;
 mod format;
 mod history;
 mod optimize;
+mod orphan_cache;
 mod packaging;
 mod pipeline;
 mod rules;
