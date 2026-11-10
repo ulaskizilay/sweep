@@ -2164,6 +2164,7 @@ fn execute_versions(
 
     let mut walk_skipped = 0usize;
     let mut ignored_entries = 0usize;
+    let mut withheld = 0usize;
     // A release tree is removed whole, and its installer writes links inside it:
     // the standalone `codex` release is a directory holding `codex` as a link to
     // the real binary. Refusing that link would leave the directory non-empty at
@@ -2221,7 +2222,35 @@ fn execute_versions(
             .map(|entry| entry.path.as_path())
             .collect();
         paths.push(candidate.path.as_path());
+        let refusals_before = plan.denied().len();
         plan_candidates(plan, &tree_ctx, rule, &mut run, paths);
+        // The walk finished, but the plan may still have refused a child: a file
+        // that is open right now, or one that fails validation. Removing the
+        // rest would leave a tree that looks installed but is not - the same
+        // outcome the walk checks above exist to avoid - so the whole entry goes
+        // back. The refusal stays in the report; what changes is that the entry
+        // is no longer half-removed.
+        if plan.denied()[refusals_before..]
+            .iter()
+            .any(|denied| is_within(&candidate.path, &denied.path))
+        {
+            let withdrawn: Vec<(PathBuf, u64)> = plan
+                .items()
+                .iter()
+                .filter(|item| {
+                    item.rule() == &rule.id && is_within(&candidate.path, item.literal())
+                })
+                .map(|item| (item.path().to_path_buf(), item.bytes()))
+                .collect();
+            for (path, _) in &withdrawn {
+                plan.forget(path);
+            }
+            run.items = run.items.saturating_sub(withdrawn.len());
+            run.bytes = run
+                .bytes
+                .saturating_sub(withdrawn.iter().map(|(_, bytes)| bytes).sum::<u64>());
+            withheld += 1;
+        }
     }
 
     run.ignored = ignored_entries;
@@ -2230,6 +2259,7 @@ fn execute_versions(
         keep_versions,
         walk_skipped,
         ignored_entries,
+        withheld,
     ));
 
     if run.items == 0 && run.refused == 0 {
@@ -2244,6 +2274,7 @@ fn versions_detail(
     keep_versions: u32,
     walk_skipped: usize,
     ignored_entries: usize,
+    withheld: usize,
 ) -> String {
     let mut detail = format!(
         "{} entries, keeping the newest {keep_versions} and the launcher target, {} to remove",
@@ -2251,7 +2282,7 @@ fn versions_detail(
         found
             .candidates
             .len()
-            .saturating_sub(walk_skipped + ignored_entries)
+            .saturating_sub(walk_skipped + ignored_entries + withheld)
     );
     if found.kept > 0 {
         detail.push_str(&format!("; {} kept", found.kept));
@@ -2272,6 +2303,12 @@ fn versions_detail(
         detail.push_str(&format!(
             "; {ignored_entries} versions left whole because a path your ignore file \
              protects is inside them"
+        ));
+    }
+    if withheld > 0 {
+        detail.push_str(&format!(
+            "; {withheld} versions left whole because a path inside them could not be \
+             validated for removal"
         ));
     }
     detail
@@ -3309,6 +3346,68 @@ privilege = "user"
                 .all(|item| !item.path().starts_with(&live)),
             "the live release stays"
         );
+    }
+
+    #[test]
+    fn a_version_tree_holding_an_open_file_stays_whole() {
+        // The walk finished, but the plan refused one file because it is open
+        // right now. Removing the rest would leave a tree that looks installed
+        // and is not, which is the outcome the kind exists to avoid.
+        let temp = tree(&[]);
+        let root = temp.path().join("releases");
+        let old = root.join("0.154.0-x86_64-unknown-linux-musl");
+        std::fs::create_dir_all(&old).expect("mkdir");
+        std::fs::write(old.join("codex"), "body").expect("write");
+        let live = root.join("0.160.0-x86_64-unknown-linux-musl");
+        std::fs::create_dir_all(&live).expect("mkdir");
+        std::fs::write(live.join("codex"), "body").expect("write");
+        age(&old, 90);
+        age(&live, 90);
+        let launcher = temp.path().join("current");
+        std::os::unix::fs::symlink(&live, &launcher).expect("symlink");
+
+        let held = File::open(old.join("codex")).expect("open");
+
+        let xdg = xdg_at(temp.path());
+        let body = versions_body(&root, &launcher, 1);
+        let set =
+            RuleSet::from_sources(&[sweep_core::rules::Source::new("test.toml", &body)], &xdg)
+                .expect("rule pack loads");
+        let mounts = MountTable::load().expect("mounts");
+        let probe = RealProbe::new().expect("probe").with_open_scan();
+        let Built { plan, report } = build(
+            Scope::CLEAN,
+            &set,
+            &xdg,
+            &probe,
+            &mounts,
+            &[],
+            &Limits::default(),
+            Mode::Apply,
+            &sweep_core::ignore::Ignore::empty(&xdg.home),
+        );
+
+        assert!(
+            plan.items().is_empty(),
+            "the whole release must be withdrawn, not half planned: {:?}",
+            plan.items()
+        );
+        assert_eq!(plan.denied().len(), 1, "the open file is still reported");
+        let run = report
+            .rules
+            .iter()
+            .find(|run| run.id == "test.tool.versions")
+            .expect("run");
+        assert_eq!(run.items, 0);
+        assert_eq!(run.refused, 1);
+        assert!(
+            run.detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("could not be validated")),
+            "the detail must say the entry was left whole: {:?}",
+            run.detail
+        );
+        drop(held);
     }
 
     #[test]

@@ -423,7 +423,9 @@ The retention is a count plus one fact, not an age:
    whole one, because the launcher may still point at it. A link **inside** the
    entry is part of the tree and is planned as a link - the `codex` release keeps
    `codex` pointing at its real binary - so the directory is not left non-empty
-   at the sink.
+   at the sink. A child the plan refuses (a file that is open right now, say)
+   sends the whole entry back for the same reason; the refusal is still counted
+   and reported, but the tree is not half removed.
 
 The launcher is read once more after you confirm, because an update can move it
 while the prompt is open. Any planned item the link names now — or that sits
