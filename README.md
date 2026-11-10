@@ -24,7 +24,7 @@
 > the plan, asks once, then deletes through the single funnel and writes one
 > operation-log row per decision;
 > `--dry-run` stops before the question and writes nothing at all. The catalog is
-> 132 rules over sixteen sections, and the section whose loss may not be
+> 134 rules over sixteen sections, and the section whose loss may not be
 > recoverable — downloaded model weights — is skipped unless you name it. System
 > caches are swept through a second process: `sweep` never runs as root, so it
 > plans as you and asks before elevating.
@@ -105,25 +105,25 @@ silently cleans nothing on a large fraction of machines. The resolved physical
 path is re-tested against the same list, deny-only, and the delete happens
 through a directory handle opened with `RESOLVE_NO_SYMLINKS`.
 
-The full contract — including the eleven residual risks that are *not* solved —
+The full contract — including the twelve residual risks that are *not* solved —
 is in [`docs/SAFETY.md`](docs/SAFETY.md).
 
 ## The rules
 
 The catalog is TOML, and it is data rather than code: `rules/01-system.toml`
-through `rules/16-model-caches.toml`, 132 rules over sixteen sections, 118
+through `rules/16-model-caches.toml`, 134 rules over sixteen sections, 120
 enabled in this build. Each rule names a root, a kind, a retention and the
 sentence that justifies deleting there.
 
 ```bash
 $ sweep rules list
-sweep rules — 16 packs, 132 rules, 118 enabled
+sweep rules — 16 packs, 134 rules, 120 enabled
 
   section            rules  enabled
   system                 8        5
   user-essentials        6        6
   ...
-  dev-tools             45       45
+  dev-tools             47       47
   ...
   model-caches           3        3  opt-in
 
@@ -148,8 +148,9 @@ sweep rules — 16 packs, 132 rules, 118 enabled
     model.whisper.cache            dir-age        90d  on    /home/u/.cache/whisper
 ```
 
-Nine kinds (`dir-sweep`, `dir-age`, `file-pattern`, `tool-cache`, `trash-empty`,
-`hf-cache`, `pkg-cache`, `project-artifacts`, `report-only`) cover every target.
+Ten kinds (`dir-sweep`, `dir-age`, `file-pattern`, `tool-cache`, `trash-empty`,
+`hf-cache`, `pkg-cache`, `versions`, `project-artifacts`, `report-only`) cover
+every target.
 `dir-age` keeps a whole subtree unless *every* entry in it is idle past the
 cutoff and nothing in it was left alone.
 
@@ -160,6 +161,13 @@ months still has the archive of the kernel it is running. A version downloaded
 in the last `keep_days` is kept regardless: that is a downgrade in progress.
 On a stock Arch cache, `sweep clean --only system` planned the same 170 files,
 byte for byte, as `paccache -d -k2` when this was verified.
+
+`versions` is for tools that install each release beside the last one and leave
+a launcher symlink pointing at the one in use. It keeps the newest
+`keep_versions` entries **and** the launcher's target, and plans nothing at all
+when the launcher is missing, is not a symlink, dangles, or points outside the
+directory: "keep the newest" is a guess about which release is live, while the
+link is the statement. A directory entry is taken whole, never in part.
 
 A root segment may contain `*` or `?` when a tool puts its version in the
 directory name: `{cache}/Google/AndroidStudio*` is one rule that finds every

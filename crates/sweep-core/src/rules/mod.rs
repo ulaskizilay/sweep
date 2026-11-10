@@ -188,6 +188,10 @@ pub enum Kind {
     /// Keep the newest N versions of every package in a package-manager cache
     /// and remove the rest; `keep_days` acts as a recency floor.
     PkgCache,
+    /// Keep the newest N entries of a directory that holds one entry per
+    /// installed version of a tool, plus the entry a launcher still points at,
+    /// and remove the rest; `keep_days` acts as a recency floor.
+    Versions,
     /// Remove build artifacts inside project directories, found by manifest.
     /// `node_modules` alone is not evidence; the `package.json` beside it is.
     ProjectArtifacts,
@@ -196,7 +200,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 9] = [
+    pub const ALL: [Kind; 10] = [
         Kind::DirSweep,
         Kind::DirAge,
         Kind::FilePattern,
@@ -204,6 +208,7 @@ impl Kind {
         Kind::TrashEmpty,
         Kind::HfCache,
         Kind::PkgCache,
+        Kind::Versions,
         Kind::ProjectArtifacts,
         Kind::ReportOnly,
     ];
@@ -217,6 +222,7 @@ impl Kind {
             Kind::TrashEmpty => "trash-empty",
             Kind::HfCache => "hf-cache",
             Kind::PkgCache => "pkg-cache",
+            Kind::Versions => "versions",
             Kind::ProjectArtifacts => "project-artifacts",
             Kind::ReportOnly => "report-only",
         }
@@ -233,6 +239,7 @@ impl Kind {
             "trash-empty" => Kind::TrashEmpty,
             "hf-cache" => Kind::HfCache,
             "pkg-cache" => Kind::PkgCache,
+            "versions" => Kind::Versions,
             "project-artifacts" => Kind::ProjectArtifacts,
             "report-only" => Kind::ReportOnly,
             "if-missing-owner" => {
@@ -393,8 +400,11 @@ pub struct Rule {
     pub evidence: String,
     pub recoverable: bool,
     pub keep_days: u32,
-    /// How many versions of a package to keep. `Some` only for `pkg-cache`.
+    /// How many versions to keep. `Some` only for `pkg-cache` and `versions`.
     pub keep_versions: Option<u32>,
+    /// The launcher a `versions` rule reads: the entry it resolves to is never
+    /// removed, whatever its rank. `Some` only for `versions`.
+    pub keep_link: Option<Template>,
     pub requires: Vec<Requirement>,
     pub privilege: Privilege,
     pub exclude: Vec<Pattern>,

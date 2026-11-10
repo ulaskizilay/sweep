@@ -231,6 +231,61 @@ fn a_cache_root_that_holds_user_state_keeps_it() {
 }
 
 #[test]
+fn a_versions_rule_names_the_launcher_that_must_survive() {
+    // "Keep the newest" is a guess about which release is live. The launcher is
+    // the statement, so every `versions` rule has to name one, and the named
+    // path has to sit outside the directory being swept: a link inside it would
+    // be skipped as a link and prove nothing about the entries.
+    let xdg = xdg();
+    let set = catalog();
+    for rule in set.rules() {
+        if rule.kind != Kind::Versions {
+            continue;
+        }
+        assert!(
+            rule.keep_versions.is_some_and(|count| count >= 1),
+            "{}: a versions rule without a count would keep nothing",
+            rule.id
+        );
+        let link = rule
+            .keep_link
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} has no keep_link", rule.id));
+        assert!(
+            !link.has_glob(),
+            "{}: keep_link must name one launcher, not a pattern",
+            rule.id
+        );
+        let root = rule.root.literal_prefix(&xdg);
+        assert!(
+            !link.literal_prefix(&xdg).starts_with(&root),
+            "{}: the launcher is inside the swept directory",
+            rule.id
+        );
+    }
+
+    let rule = |id: &str| {
+        set.rules()
+            .iter()
+            .find(|rule| rule.id.as_str() == id)
+            .unwrap_or_else(|| panic!("{id} is missing from the catalog"))
+    };
+    for (id, link) in [
+        ("dev.claude.versions", "{home}/.local/bin/claude"),
+        (
+            "dev.cursor-agent.versions",
+            "{home}/.local/bin/cursor-agent",
+        ),
+    ] {
+        assert_eq!(
+            rule(id).keep_link.as_ref().map(|link| link.raw()),
+            Some(link),
+            "{id}: the launcher is the safety property of this rule"
+        );
+    }
+}
+
+#[test]
 fn a_file_pattern_rule_never_matches_everything() {
     for rule in catalog().rules() {
         if rule.kind != Kind::FilePattern {
@@ -328,12 +383,21 @@ fn the_catalog_digest_is_unchanged() {
         .iter()
         .map(|rule| {
             format!(
-                "{}|{}|{}|{}|{}|{}",
+                "{}|{}|{}|{}|{}|{}|{}|{}",
                 rule.id,
                 rule.section,
                 rule.kind,
                 rule.root.raw(),
                 rule.keep_days,
+                // A count and a launcher decide which entry survives just as
+                // much as an age does, so they belong in the digest too.
+                rule.keep_versions
+                    .map(|n| n.to_string())
+                    .unwrap_or_default(),
+                rule.keep_link
+                    .as_ref()
+                    .map(|link| link.raw())
+                    .unwrap_or_default(),
                 rule.enabled
             )
         })
@@ -352,7 +416,7 @@ fn the_catalog_digest_is_unchanged() {
 
     // Update this value in the same commit as the rule change, so the review
     // diff shows the catalog moved on purpose.
-    const EXPECTED: u64 = 0x92ba_b1a8_cd4d_4100;
+    const EXPECTED: u64 = 0x1973_0062_5923_5fe0;
     assert_eq!(
         format!("{hash:016x}"),
         format!("{EXPECTED:016x}"),

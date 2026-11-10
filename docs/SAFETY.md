@@ -575,6 +575,29 @@ a real consequence and it is why the unit is the artifact rather than the file.
 link on most filesystems), not the target's size, because nothing was freed
 there.
 
+### R12. The launcher can move while the prompt is open
+
+A `versions` rule decides which entry is live by reading the launcher symlink
+before the plan is built. The plan then waits for consent. If an update unpacks
+a new entry and re-points the link while the question is on screen, the entry
+the plan intends to remove can become the entry in use; if a downgrade re-points
+the link at an older entry, the same thing happens. The funnel re-checks
+`st_dev`/`st_ino`, which catches a path that was swapped, but a launcher
+re-point changes no inode, so it cannot catch this one.
+
+*What limits it:* the window is the confirmation prompt, and `--yes` reduces it
+to milliseconds. The consequence is a dangling launcher, not lost work: the
+removed entry is a re-downloadable release, which is why the rule is
+`recoverable = true`, and the tool's installer recreates the link on the next
+run. Nothing inside the entry is user data — a `versions` root holds installed
+releases, never configuration, sessions or transcripts.
+
+*What remains:* a user who starts an update in another terminal and answers the
+prompt afterwards can lose the release that just became current. Re-reading the
+launcher after consent and withdrawing the items it now names is the obvious
+follow-up; it is not in this build, so this stays a stated risk rather than a
+solved one.
+
 ---
 
 ## How to add a rule

@@ -37,8 +37,11 @@ struct RuleReport {
     kind: &'static str,
     enabled: bool,
     keep_days: u32,
-    /// `Some` only for `kind = "pkg-cache"`: how many versions stay.
+    /// `Some` only for `kind = "pkg-cache"` and `"versions"`: how many versions
+    /// stay.
     keep_versions: Option<u32>,
+    /// `Some` only for `kind = "versions"`: the launcher whose target stays.
+    keep_link: Option<String>,
     recoverable: bool,
     privilege: &'static str,
     root: String,
@@ -226,6 +229,7 @@ fn build(set: &RuleSet, xdg: &Xdg) -> ListReport {
             enabled: rule.enabled,
             keep_days: rule.keep_days,
             keep_versions: rule.keep_versions,
+            keep_link: rule.keep_link.as_ref().map(|link| link.display(xdg)),
             recoverable: rule.recoverable,
             privilege: rule.privilege.as_str(),
             root: rule.root.raw().to_string(),
@@ -338,6 +342,9 @@ fn render(report: &ListReport, verbose: u8) -> String {
             }
             if !rule.pattern.is_empty() {
                 out.push_str(&format!("      pattern  {}\n", rule.pattern.join(", ")));
+            }
+            if let Some(link) = &rule.keep_link {
+                out.push_str(&format!("      keep-link {link}\n"));
             }
             if !rule.evidence.is_empty() {
                 out.push_str(&format!("      why      {}\n", rule.evidence));

@@ -1383,6 +1383,170 @@ fn clean_yes_with_nothing_to_plan_exits_zero_and_writes_no_log() {
     );
 }
 
+// -------------------------------------------------------------- versions ---
+
+/// A tool that installs every release beside the last one, the way `claude`
+/// does: one file per version below `versions/`, and a launcher that points at
+/// the one in use.
+///
+/// Every entry is aged, because `keep_days = 0` is still a recency floor and a
+/// file written this second would be kept by it.
+fn versions_home(entries: &[&str]) -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let home = home();
+    let root = home.path().join(".local/share/claude/versions");
+    std::fs::create_dir_all(&root).expect("mkdir");
+    for name in entries {
+        let path = root.join(name);
+        write_blob(&path);
+        age_file(&path, 90);
+    }
+    let launcher = home.path().join(".local/bin/claude");
+    std::fs::create_dir_all(launcher.parent().expect("parent")).expect("mkdir");
+    (home, root, launcher)
+}
+
+fn version_rule<'a>(report: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+    report["rules"]
+        .as_array()
+        .expect("rules")
+        .iter()
+        .find(|rule| rule["id"] == id)
+        .unwrap_or_else(|| panic!("{id} must be in the report"))
+}
+
+/// `st_blocks * 512`, the number the plan reports and `du` prints.
+fn accounted(path: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).expect("metadata").blocks() * 512
+}
+
+#[test]
+fn a_versions_rule_keeps_the_launcher_target_and_plans_the_rest() {
+    let (home, root, launcher) = versions_home(&["2.1.317", "2.1.318", "2.1.319"]);
+    std::os::unix::fs::symlink(root.join("2.1.319"), &launcher).expect("symlink");
+    let before = snapshot(home.path());
+
+    let dry = run_in(
+        home.path(),
+        &["clean", "--dry-run", "--only", "dev-tools", "--json"],
+    );
+    assert_eq!(dry.code, Some(0), "stderr: {}", dry.stderr);
+    let report: serde_json::Value = serde_json::from_str(&dry.stdout).expect("json");
+    let rule = version_rule(&report, "dev.claude.versions");
+    assert_eq!(rule["status"], "planned", "{rule}");
+    assert_eq!(rule["items"], 2, "{rule}");
+    assert_eq!(
+        rule["bytes"].as_u64().expect("bytes"),
+        accounted(&root.join("2.1.317")) + accounted(&root.join("2.1.318")),
+        "the size must be the sum of every entry the rule plans, not the last one: {rule}"
+    );
+    assert!(
+        rule["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("keeping the newest 1 and the launcher target"),
+        "the detail must say what was kept and why: {rule}"
+    );
+    assert_eq!(
+        before,
+        snapshot(home.path()),
+        "a dry run must not create, remove or rewrite anything below HOME"
+    );
+
+    let applied = run_in(home.path(), &["clean", "--yes", "--only", "dev-tools"]);
+    assert_eq!(applied.code, Some(0), "stderr: {}", applied.stderr);
+    for gone in ["2.1.317", "2.1.318"] {
+        assert!(
+            !root.join(gone).exists(),
+            "the old release must be gone: {gone}"
+        );
+    }
+    assert!(root.join("2.1.319").exists(), "the launcher target stays");
+    assert_eq!(
+        std::fs::read_link(&launcher).expect("the launcher is still a link"),
+        root.join("2.1.319"),
+        "the launcher must not be rewritten"
+    );
+
+    let rows = log_rows(home.path());
+    let removed: Vec<&serde_json::Value> = rows
+        .iter()
+        .filter(|row| row["rule"] == "dev.claude.versions")
+        .collect();
+    assert_eq!(removed.len(), 2, "one row per removed entry: {rows:?}");
+    assert!(removed.iter().all(|row| row["action"] == "REMOVED"));
+}
+
+#[test]
+fn a_versions_rule_without_a_launcher_plans_nothing() {
+    let (home, root, _launcher) = versions_home(&["2.1.317", "2.1.319"]);
+    let before = snapshot(home.path());
+
+    let dry = run_in(
+        home.path(),
+        &["clean", "--dry-run", "--only", "dev-tools", "--json"],
+    );
+    assert_eq!(dry.code, Some(0), "stderr: {}", dry.stderr);
+    let report: serde_json::Value = serde_json::from_str(&dry.stdout).expect("json");
+    let rule = version_rule(&report, "dev.claude.versions");
+    assert_eq!(rule["status"], "keep_link_unknown", "{rule}");
+    assert_eq!(rule["items"], 0, "{rule}");
+    assert_eq!(rule["bytes"], 0, "{rule}");
+    assert!(
+        rule["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("does not exist"),
+        "the detail must name the cause: {rule}"
+    );
+
+    let applied = run_in(home.path(), &["clean", "--yes", "--only", "dev-tools"]);
+    assert_eq!(applied.code, Some(0), "stderr: {}", applied.stderr);
+    assert!(
+        root.join("2.1.317").exists(),
+        "without a launcher the live version is unknown, so nothing is removed"
+    );
+    assert_eq!(before, snapshot(home.path()), "the run changed nothing");
+}
+
+#[test]
+fn a_version_tree_holding_an_ignored_path_is_left_whole() {
+    let (home, root, launcher) = versions_home(&[]);
+    for name in ["2026.09.26-dd393fe", "2026.10.01-e373342"] {
+        let dir = root.join(name);
+        std::fs::create_dir_all(dir.join("bin")).expect("mkdir");
+        write_blob(&dir.join("bin/cursor-agent"));
+        age_file(&dir.join("bin/cursor-agent"), 90);
+        age_file(&dir, 90);
+    }
+    std::os::unix::fs::symlink(root.join("2026.10.01-e373342"), &launcher).expect("symlink");
+    write(
+        home.path(),
+        ".config/sweep/ignore",
+        ".local/share/claude/versions/2026.09.26-dd393fe/bin/cursor-agent\n",
+    );
+
+    let dry = run_in(
+        home.path(),
+        &["clean", "--dry-run", "--only", "dev-tools", "--json"],
+    );
+    assert_eq!(dry.code, Some(0), "stderr: {}", dry.stderr);
+    let report: serde_json::Value = serde_json::from_str(&dry.stdout).expect("json");
+    let rule = version_rule(&report, "dev.claude.versions");
+    assert_eq!(rule["items"], 0, "{rule}");
+    assert!(
+        rule["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("a path your ignore file protects is inside them"),
+        "half a build is worse than a whole one: {rule}"
+    );
+    assert!(
+        root.join("2026.09.26-dd393fe/bin/cursor-agent").exists(),
+        "the protected path must survive"
+    );
+}
+
 // ------------------------------------------------------------ model caches ---
 
 /// A hub repository laid out the way `huggingface_hub` writes one, every file

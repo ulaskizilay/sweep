@@ -40,9 +40,14 @@ pub struct RawRule {
     pub recoverable: bool,
     #[serde(default)]
     pub keep_days: u32,
-    /// Required by `kind = "pkg-cache"`, refused by every other kind.
+    /// Required by `kind = "pkg-cache"` and `kind = "versions"`, refused by
+    /// every other kind.
     #[serde(default)]
     pub keep_versions: Option<u32>,
+    /// Required by `kind = "versions"`, refused by every other kind: the
+    /// launcher whose target must survive the sweep.
+    #[serde(default)]
+    pub keep_link: Option<String>,
     #[serde(default)]
     pub requires: Vec<String>,
     pub privilege: String,

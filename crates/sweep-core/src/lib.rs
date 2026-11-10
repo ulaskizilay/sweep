@@ -48,6 +48,7 @@ pub mod trash;
 pub mod units;
 pub mod validate;
 pub mod version;
+pub mod versions;
 
 pub use fs_facts::{FsFacts, FsType, MountInfo, MountOptions, MountTable};
 pub use funnel::{apply, ItemResult, Mode, Outcome, Report};

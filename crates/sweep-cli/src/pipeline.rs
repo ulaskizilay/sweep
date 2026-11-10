@@ -49,6 +49,7 @@ use sweep_core::rules::{Kind, Privilege, Rule, RuleSet, Section};
 use sweep_core::scan::{self, BlockKind, Collect, Entry, Limits, Select, Spec, Stop};
 use sweep_core::trash;
 use sweep_core::validate::{AllowedRoot, Policy, ValidateCtx};
+use sweep_core::versions;
 use sweep_core::{funnel, Mode, Plan, Xdg};
 
 /// Which sections a command owns when the user does not name any.
@@ -132,6 +133,8 @@ enum Status {
     SymlinkedRoot,
     Unreadable,
     ScanIncomplete,
+    /// A `versions` rule could not tell which entry the launcher uses.
+    KeepLinkUnknown,
     Empty,
 }
 
@@ -153,6 +156,7 @@ impl Status {
             Status::SymlinkedRoot => "rule root is a symlink",
             Status::Unreadable => "permission denied",
             Status::ScanIncomplete => "scan incomplete; nothing planned",
+            Status::KeepLinkUnknown => "launcher unknown; nothing planned",
             Status::Empty => "nothing to remove",
         }
     }
@@ -1330,6 +1334,9 @@ fn execute(
     if rule.kind == Kind::PkgCache {
         return execute_pkg(rule, root, probe, ctx, limits, plan, now);
     }
+    if rule.kind == Kind::Versions {
+        return execute_versions(rule, root, probe, ctx, limits, plan, now);
+    }
     if rule.kind == Kind::ProjectArtifacts {
         return execute_project(rule, root, probe, ctx, limits, plan, now);
     }
@@ -1423,7 +1430,11 @@ fn execute(
             paths
         }
         Kind::DirAge => age_candidates(rule, &collected, root, now, &mut run),
-        Kind::HfCache | Kind::PkgCache | Kind::ProjectArtifacts | Kind::TrashEmpty => {
+        Kind::HfCache
+        | Kind::PkgCache
+        | Kind::Versions
+        | Kind::ProjectArtifacts
+        | Kind::TrashEmpty => {
             unreachable!("handled before the walk")
         }
     };
@@ -1890,6 +1901,184 @@ fn execute_pkg(
     run
 }
 
+/// A directory that holds one entry per installed version of a tool.
+///
+/// The ranking is [`sweep_core::versions`]: the newest `keep_versions` entries
+/// stay, and so does the entry the launcher resolves to. Two properties make the
+/// result deletable rather than merely smaller:
+///
+/// * **The launcher is read first.** If it is missing, not a link, dangling or
+///   pointing outside the root, the live entry is unknown and nothing is
+///   planned. "Keep the newest" is a guess; the link is the statement.
+/// * **A directory entry is taken whole.** The funnel never recurses, so an
+///   entry that is a tree is walked completely and planned entry by entry. A
+///   walk that could not finish, or that holds a path the ignore file protects,
+///   leaves the whole entry in place: half a version is not a version.
+fn execute_versions(
+    rule: &Rule,
+    root: &Path,
+    probe: &RealProbe,
+    ctx: &ValidateCtx<'_>,
+    limits: &Limits,
+    plan: &mut Plan,
+    now: i64,
+) -> RuleRun {
+    let keep_versions = rule.keep_versions.unwrap_or(1);
+    let Some(keep_link) = rule.keep_link.as_ref().map(|link| link.expand(ctx.xdg)) else {
+        // The compiler requires `keep_link` for this kind, so this is the
+        // defensive reading of an impossible state: keep everything.
+        let mut run = base_run(rule, Status::KeepLinkUnknown, None);
+        run.detail = Some("the rule has no keep_link, so the live version is unknown".into());
+        return run;
+    };
+
+    let found = versions::scan(
+        root,
+        keep_versions,
+        &keep_link,
+        rule.keep_days,
+        now,
+        limits,
+        probe,
+    );
+    let mut run = base_run(rule, Status::Planned, None);
+    run.scanned_bytes = found.bytes_visited;
+
+    if found.missing_root {
+        run.status = Status::NotPresent;
+        return run;
+    }
+    if found.root_is_symlink {
+        run.status = Status::SymlinkedRoot;
+        run.detail = Some(
+            "a symlinked version directory is not followed; point the rule at the real path".into(),
+        );
+        return run;
+    }
+    if found.not_a_directory {
+        run.status = Status::NotADirectory;
+        return run;
+    }
+    if found.root_unreadable {
+        run.status = Status::Unreadable;
+        run.detail = unreadable_detail(rule);
+        return run;
+    }
+    if found.stop != Stop::Complete {
+        run.status = Status::ScanIncomplete;
+        run.detail = Some(match found.stop {
+            Stop::EntryBudget => "entry budget exhausted".to_string(),
+            Stop::TimeBudget => "time budget exhausted".to_string(),
+            Stop::Complete => unreachable!("checked above"),
+        });
+        return run;
+    }
+    if let Some(problem) = found.keep_link_problem {
+        run.status = Status::KeepLinkUnknown;
+        run.detail = Some(problem.message().to_string());
+        return run;
+    }
+
+    let mut walk_skipped = 0usize;
+    let mut ignored_entries = 0usize;
+    for candidate in &found.candidates {
+        if !candidate.is_dir {
+            plan_candidates(
+                plan,
+                ctx,
+                rule,
+                &mut run,
+                std::iter::once(candidate.path.as_path()),
+            );
+            continue;
+        }
+
+        let mut spec = Spec::new(usize::MAX, limits);
+        spec.include_links = true;
+        spec.ignore = plan.ignore();
+        let collected = scan::collect(&candidate.path, &candidate.path, 0, &spec, probe);
+        run.scanned_bytes = run.scanned_bytes.saturating_add(collected.bytes);
+        if collected
+            .blocked
+            .iter()
+            .any(|block| block.kind == BlockKind::Ignored)
+        {
+            // The user protected something inside this version. Removing the
+            // rest would leave a tree that looks installed but is not.
+            ignored_entries += 1;
+            continue;
+        }
+        if collected.stop != Stop::Complete
+            || collected.root_unreadable
+            || !collected.blocked.is_empty()
+        {
+            // Unknown is not empty: a half-removed version is worse than a whole
+            // one, because the launcher may still be pointed at it.
+            walk_skipped += 1;
+            continue;
+        }
+        let mut paths: Vec<&Path> = collected
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_path())
+            .collect();
+        paths.push(candidate.path.as_path());
+        plan_candidates(plan, ctx, rule, &mut run, paths);
+    }
+
+    run.ignored = ignored_entries;
+    run.detail = Some(versions_detail(
+        &found,
+        keep_versions,
+        walk_skipped,
+        ignored_entries,
+    ));
+
+    if run.items == 0 && run.refused == 0 {
+        run.status = Status::Empty;
+    }
+    run
+}
+
+/// The one line a user reads about a version sweep.
+fn versions_detail(
+    found: &versions::Scan,
+    keep_versions: u32,
+    walk_skipped: usize,
+    ignored_entries: usize,
+) -> String {
+    let mut detail = format!(
+        "{} entries, keeping the newest {keep_versions} and the launcher target, {} to remove",
+        found.entries,
+        found
+            .candidates
+            .len()
+            .saturating_sub(walk_skipped + ignored_entries)
+    );
+    if found.kept > 0 {
+        detail.push_str(&format!("; {} kept", found.kept));
+    }
+    if found.unrecognised > 0 {
+        detail.push_str(&format!(
+            "; {} entries left alone because they are not versions or could not be read",
+            found.unrecognised
+        ));
+    }
+    if walk_skipped > 0 {
+        detail.push_str(&format!(
+            "; {walk_skipped} versions left whole because their contents could not be \
+             enumerated completely"
+        ));
+    }
+    if ignored_entries > 0 {
+        detail.push_str(&format!(
+            "; {ignored_entries} versions left whole because a path your ignore file \
+             protects is inside them"
+        ));
+    }
+    detail
+}
+
 /// Pushes validated candidates into the plan and keeps the per-rule tally.
 fn plan_candidates<I, P>(
     plan: &mut Plan,
@@ -1904,7 +2093,9 @@ fn plan_candidates<I, P>(
     // `Plan::items` is the whole plan, and a glob root runs this function once
     // per matched directory. Summing every item with this rule id would count
     // the earlier directories again on each call, so only the tail added here
-    // belongs to this run.
+    // belongs to this run. The tail is added, not assigned: a rule that plans
+    // several artifacts or several version entries calls this once per entry,
+    // and the run's total is the sum of all of them.
     let before = plan.items().len();
     for path in candidates {
         match plan.push(path.as_ref(), &rule.id, ctx) {
@@ -1913,11 +2104,13 @@ fn plan_candidates<I, P>(
         }
     }
 
-    run.bytes = plan.items()[before..]
-        .iter()
-        .filter(|item| item.rule() == &rule.id)
-        .map(|item| item.bytes())
-        .sum();
+    run.bytes = run.bytes.saturating_add(
+        plan.items()[before..]
+            .iter()
+            .filter(|item| item.rule() == &rule.id)
+            .map(|item| item.bytes())
+            .sum::<u64>(),
+    );
 }
 
 /// Everything the walk enumerated, minus a directory that cannot be emptied.

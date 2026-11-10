@@ -596,3 +596,41 @@ recoverable = true
 keep_days = 0
 requires = ["dir:{home}/Android/Sdk"]
 privilege = "user"
+
+# Two tools install every release beside the last one and leave a launcher
+# symlink pointing at the release in use: `claude` writes one executable per
+# version, `cursor-agent` writes a whole tree per build. The old entries are not
+# caches - nothing rebuilds them - but they are complete copies of the program,
+# so they are large: 331-340 MiB per `claude` release and 556-558 MiB per
+# `cursor-agent` build on this machine, three of each.
+#
+# `kind = "versions"` keeps the newest entry and the one the launcher resolves
+# to, and plans nothing at all when the launcher is missing, is not a symlink,
+# dangles, or points outside the directory. "Newest" is a guess about which
+# release is live; the link is the statement, and a pinned or half-updated
+# launcher must not lose the working binary.
+[[rule]]
+id = "dev.claude.versions"
+section = "dev-tools"
+kind = "versions"
+root = "{home}/.local/share/claude/versions"
+keep_versions = 1
+keep_link = "{home}/.local/bin/claude"
+evidence = "Each entry is one complete release; the launcher names the release in use and the updater writes a new entry instead of editing one, so only an older copy of the same program is removed."
+recoverable = true
+keep_days = 0
+requires = ["dir:{home}/.local/share/claude/versions"]
+privilege = "user"
+
+[[rule]]
+id = "dev.cursor-agent.versions"
+section = "dev-tools"
+kind = "versions"
+root = "{home}/.local/share/cursor-agent/versions"
+keep_versions = 1
+keep_link = "{home}/.local/bin/cursor-agent"
+evidence = "Each entry is one complete build of the agent; the launcher names the build in use and the updater writes a new tree instead of editing one, so only an older copy of the same program is removed."
+recoverable = true
+keep_days = 0
+requires = ["dir:{home}/.local/share/cursor-agent/versions"]
+privilege = "user"

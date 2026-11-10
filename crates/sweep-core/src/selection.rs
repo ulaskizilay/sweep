@@ -153,6 +153,11 @@ impl Selection {
             // compiler refuses `privilege = "root"` for it outside `system`.
             // An empty set is the honest answer if one ever arrives here.
             Kind::ProjectArtifacts => Self::default(),
+            // A version sweep is user-owned for the same reason, and the
+            // compiler refuses `privilege = "root"` for the kind outright: the
+            // launcher it reads is a path in the user's home. Empty is the
+            // honest answer if one ever arrives here.
+            Kind::Versions => Self::default(),
         }
     }
 
@@ -214,6 +219,7 @@ impl Selection {
             // Handled by the scanners, or never reached by this process.
             Kind::PkgCache
             | Kind::HfCache
+            | Kind::Versions
             | Kind::ProjectArtifacts
             | Kind::TrashEmpty
             | Kind::ReportOnly => Self::default(),

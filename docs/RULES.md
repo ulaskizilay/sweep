@@ -37,7 +37,8 @@ root        = "{cache}/cargo"           # required, absolute, template allowed
 evidence    = "Cargo re-downloads ..."  # required for deleting kinds
 recoverable = true                      # required when keep_days = 0
 keep_days   = 30                        # default 0
-keep_versions = 2                       # pkg-cache only
+keep_versions = 2                       # pkg-cache and versions only
+keep_link   = "{home}/.local/bin/tool"  # versions only: the launcher in use
 requires    = ["bin:cargo"]             # default []
 privilege   = "user"                    # required: "user" or "root"
 exclude     = ["registry/src/**"]       # default [], relative globs
@@ -165,6 +166,7 @@ scan of any one directory keeps that directory out of the plan.
 | `trash-empty` | each trashed payload and the `.trashinfo` record that names it, in that order | must be 0: the whole trash goes |
 | `hf-cache` | blobs no `snapshots/` link resolves to, plus abandoned `*.incomplete` downloads | must be > 0 |
 | `pkg-cache` | every package version outside the newest `keep_versions`, and its detached `.sig` | `keep_versions` required; `keep_days` is a recency floor |
+| `versions` | every entry of a version directory outside the newest `keep_versions` and the launcher's target | `keep_versions` and `keep_link` required; `keep_days` is a recency floor |
 | `project-artifacts` | build directories inside project roots, found by the manifest beside them, plus symbolic links inside them | applied; must be > 0 on a `{home}` root |
 | `report-only` | nothing; counts entries and bytes | informational |
 
@@ -273,7 +275,7 @@ Every check below applies to the built-in packs and to the overlay equally.
 | `bad_id` | the id is empty, longer than 64 bytes, or has a character outside `[a-z0-9._-]` |
 | `duplicate_id` | the id already exists — including a built-in id, so the overlay cannot replace one |
 | `unknown_section` | the section is not one of the sixteen |
-| `unknown_kind` | the kind is not one of the nine |
+| `unknown_kind` | the kind is not one of the ten |
 | `unsupported_kind` | the kind exists but is not implemented yet (`if-missing-owner`) |
 | `bad_privilege` | the value is neither `user` nor `root` |
 | `template` | the root is relative, empty, contains `..` or a control byte, mixes a variable with text, or names an unknown variable |
@@ -286,9 +288,13 @@ Every check below applies to the built-in packs and to the overlay equally.
 | `missing_pattern` | `kind = "file-pattern"` with no `pattern` |
 | `unused_pattern` | `pattern` on a kind that does not read it |
 | `bad_pattern` | a pattern is empty, absolute, ends with `/`, has a control byte, or is wildcards only on a `{home}` root |
-| `missing_keep_versions` | `kind = "pkg-cache"` with no `keep_versions` |
+| `missing_keep_versions` | `kind = "pkg-cache"` or `kind = "versions"` with no `keep_versions` |
 | `unused_keep_versions` | `keep_versions` on a kind that does not read it |
-| `bad_keep_versions` | `keep_versions = 0`, which would leave no version of anything in the cache |
+| `bad_keep_versions` | `keep_versions = 0`, which would leave no version of anything |
+| `missing_keep_link` | `kind = "versions"` with no `keep_link`, so the entry in use is unknown |
+| `unused_keep_link` | `keep_link` on a kind that does not read it |
+| `bad_keep_link` | `keep_link` is not a valid template or contains a wildcard; it must name one launcher |
+| `versions_layout` | `kind = "versions"` declares `max_depth` or `exclude`; the kind keeps or removes whole entries |
 | `ignored_keep_days` | `dir-sweep` or `tool-cache` declares `keep_days > 0`, which that kind never reads |
 | `trash_layout` | `kind = "trash-empty"` with a root other than `{data}/Trash`, a non-zero `keep_days`, a `max_depth`, a `pattern`, an `exclude`, or `privilege = "root"` |
 | `requirement` | a `requires` entry is not `bin:<name>` or `dir:<path>` |
@@ -383,6 +389,43 @@ On a stock Arch cache this matched `paccache -d -k2` file for file - 170 paths
 and the same byte total - when the handler was verified. The version comparison
 itself has an automated differential test against `vercmp`, skipped where pacman
 is not installed.
+
+### The `versions` rule, precisely
+
+Some tools install each release beside the last one and leave a launcher symlink
+pointing at the release in use: `~/.local/share/claude/versions/2.1.319` for one
+executable, `~/.local/share/cursor-agent/versions/<build>/` for a whole tree.
+Those entries are not caches - nothing regenerates them - but they are also no
+longer the installed tool, and each one is the size of the program.
+
+The retention is a count plus one fact, not an age:
+
+1. The root is listed completely. A listing that could not finish plans nothing,
+   because ranking the newest against a set with entries missing is a guess.
+2. The launcher named by `keep_link` is read **before** any ranking. If it is
+   missing, is not a symlink, dangles, or resolves outside the root, the live
+   entry is unknown and the rule plans nothing (`keep_link_unknown`). "Keep the
+   newest" is a guess about which release is live; the link is the statement,
+   and a pinned version or an update that has unpacked a new entry but not moved
+   the link must not lose the working binary.
+3. Entries are ordered with the same `vercmp` as `pkg-cache`; a tie in that
+   order keeps both, because the comparison does not separate them.
+4. The newest `keep_versions` entries, the launcher's target, and every entry
+   written within `keep_days` are kept. The rest are planned.
+5. A child whose name does not start with a digit, or whose name contains a byte
+   outside `[0-9A-Za-z._+~-]`, is not a version: `README`, `current`, `.DS_Store`
+   are counted and left alone. A symlink inside the root is never a candidate -
+   the sink would unlink the link, not the tree its name suggests.
+6. An entry that is a directory is taken whole. It is walked completely first;
+   a walk that could not finish, or that holds a path the ignore file protects,
+   leaves the entire entry in place. Half an installed version is worse than a
+   whole one, because the launcher may still point at it.
+
+`max_depth` and `exclude` are refused at load (`versions_layout`): an exclude
+inside one entry would produce exactly the half-installed tree the kind exists
+to avoid. The kind is user-owned, so the elevated child never re-derives it, and
+a directory candidate makes the child's re-derived selection incomplete rather
+than partly admitted.
 
 `report-only` is exempt from most of this because it never contributes a plan
 item. It may read a protected tree such as `/var/log/journal`, which is how the

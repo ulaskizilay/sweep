@@ -53,6 +53,10 @@ pub enum RuleErrorKind {
     MissingKeepVersions,
     UnusedKeepVersions,
     BadKeepVersions,
+    MissingKeepLink,
+    UnusedKeepLink,
+    BadKeepLink,
+    VersionsLayout,
     IgnoredKeepDays,
     Requirement,
     BadDepth,
@@ -85,6 +89,10 @@ impl RuleErrorKind {
             RuleErrorKind::MissingKeepVersions => "missing_keep_versions",
             RuleErrorKind::UnusedKeepVersions => "unused_keep_versions",
             RuleErrorKind::BadKeepVersions => "bad_keep_versions",
+            RuleErrorKind::MissingKeepLink => "missing_keep_link",
+            RuleErrorKind::UnusedKeepLink => "unused_keep_link",
+            RuleErrorKind::BadKeepLink => "bad_keep_link",
+            RuleErrorKind::VersionsLayout => "versions_layout",
             RuleErrorKind::IgnoredKeepDays => "ignored_keep_days",
             RuleErrorKind::Requirement => "requirement",
             RuleErrorKind::BadDepth => "bad_depth",
@@ -142,6 +150,7 @@ pub fn compile(raw: RawRule, pack: &str, xdg: &Xdg) -> Result<Rule, RuleError> {
         recoverable,
         keep_days,
         keep_versions,
+        keep_link,
         requires,
         privilege,
         exclude,
@@ -285,10 +294,10 @@ pub fn compile(raw: RawRule, pack: &str, xdg: &Xdg) -> Result<Rule, RuleError> {
     let patterns = compile_patterns(patterns, pack, &label, "pattern")?;
     let exclude = compile_patterns(exclude, pack, &label, "exclude")?;
 
-    // `keep_versions` is the retention of `pkg-cache`. It is required there and
-    // refused everywhere else, for the same reason `pattern` is: a key the
-    // engine does not read would be printed by `rules list` as a promise the
-    // run never keeps.
+    // `keep_versions` is the retention of `pkg-cache` and `versions`. It is
+    // required there and refused everywhere else, for the same reason `pattern`
+    // is: a key the engine does not read would be printed by `rules list` as a
+    // promise the run never keeps.
     let keep_versions =
         match (kind, keep_versions) {
             (Kind::PkgCache, None) => return Err(fail(
@@ -298,27 +307,86 @@ pub fn compile(raw: RawRule, pack: &str, xdg: &Xdg) -> Result<Rule, RuleError> {
                 "kind = \"pkg-cache\" needs keep_versions: how many versions of each package stay"
                     .to_string(),
             )),
-            (Kind::PkgCache, Some(0)) => {
+            (Kind::Versions, None) => return Err(fail(
+                RuleErrorKind::MissingKeepVersions,
+                pack,
+                Some(&label),
+                "kind = \"versions\" needs keep_versions: how many entries of the directory stay"
+                    .to_string(),
+            )),
+            (Kind::PkgCache | Kind::Versions, Some(0)) => {
                 return Err(fail(
                     RuleErrorKind::BadKeepVersions,
                     pack,
                     Some(&label),
-                    "keep_versions = 0 would leave no version of anything in the cache; \
-                 use at least 1"
+                    "keep_versions = 0 would leave no version of anything; use at least 1"
                         .to_string(),
                 ))
             }
-            (Kind::PkgCache, Some(count)) => Some(count),
+            (Kind::PkgCache | Kind::Versions, Some(count)) => Some(count),
             (_, Some(_)) => {
                 return Err(fail(
                     RuleErrorKind::UnusedKeepVersions,
                     pack,
                     Some(&label),
-                    format!("keep_versions is only read by kind = \"pkg-cache\", not \"{kind}\""),
+                    format!(
+                        "keep_versions is only read by kind = \"pkg-cache\" and \"versions\", \
+                         not \"{kind}\""
+                    ),
                 ))
             }
             (_, None) => None,
         };
+
+    // `keep_link` is what makes a `versions` sweep safe rather than tidy: the
+    // newest entry is not necessarily the live one, because a launcher may still
+    // point at the previous version while an update is being unpacked, or at an
+    // older one the user pinned. Naming the launcher turns "keep the newest" into
+    // "keep the newest and the one in use", and a launcher that cannot be read
+    // plans nothing at all.
+    let keep_link = match (kind, keep_link) {
+        (Kind::Versions, None) => {
+            return Err(fail(
+                RuleErrorKind::MissingKeepLink,
+                pack,
+                Some(&label),
+                "kind = \"versions\" needs keep_link: the launcher whose target must survive, \
+                 such as \"{home}/.local/bin/tool\""
+                    .to_string(),
+            ))
+        }
+        (Kind::Versions, Some(raw)) => {
+            let template = Template::parse(&raw).map_err(|error| {
+                fail(
+                    RuleErrorKind::BadKeepLink,
+                    pack,
+                    Some(&label),
+                    format!("keep_link {raw:?}: {error}"),
+                )
+            })?;
+            if template.has_glob() {
+                return Err(fail(
+                    RuleErrorKind::BadKeepLink,
+                    pack,
+                    Some(&label),
+                    format!(
+                        "keep_link {raw:?} is a pattern; name the one launcher whose target is \
+                         in use"
+                    ),
+                ));
+            }
+            Some(template)
+        }
+        (_, Some(_)) => {
+            return Err(fail(
+                RuleErrorKind::UnusedKeepLink,
+                pack,
+                Some(&label),
+                format!("keep_link is only read by kind = \"versions\", not \"{kind}\""),
+            ))
+        }
+        (_, None) => None,
+    };
 
     // The remaining checks are ordered from "this would be catastrophic" to
     // "this would be confusing", so a rule with several problems reports the
@@ -533,6 +601,22 @@ pub fn compile(raw: RawRule, pack: &str, xdg: &Xdg) -> Result<Rule, RuleError> {
         }
     }
 
+    // A version directory has one shape: the entries are the versions and the
+    // retention is a count. An `exclude` inside one entry would leave a
+    // half-installed version behind, which looks installed and is not, and
+    // `max_depth` describes a walk the kind does not do - it walks each entry it
+    // is about to take, not the root.
+    if kind == Kind::Versions && (max_depth.is_some() || !exclude.is_empty()) {
+        return Err(fail(
+            RuleErrorKind::VersionsLayout,
+            pack,
+            Some(&label),
+            "kind = \"versions\" takes no max_depth or exclude: it keeps a count of whole \
+             entries and never leaves part of one behind"
+                .to_string(),
+        ));
+    }
+
     // A declared retention that the engine never reads is worse than no
     // retention: `rules list` would print "30d" while the run deleted a file
     // downloaded an hour ago. `dir-sweep` and `tool-cache` mean "everything",
@@ -562,6 +646,21 @@ pub fn compile(raw: RawRule, pack: &str, xdg: &Xdg) -> Result<Rule, RuleError> {
             format!(
                 "privilege = \"root\" is only allowed in section \"system\", not \"{section}\""
             ),
+        ));
+    }
+    // `versions` is user-owned by construction: the elevated child re-derives a
+    // rule's selection, and a version directory whose launcher it would have to
+    // read belongs to the user who owns that launcher. The child's allowlist
+    // never names this kind, so a root rule would preview items it can never
+    // apply - refused here instead.
+    if privilege == Privilege::Root && kind == Kind::Versions {
+        return Err(fail(
+            RuleErrorKind::RootPrivilege,
+            pack,
+            Some(&label),
+            "kind = \"versions\" is user-owned: the launcher it reads is a path in the \
+             user's home, not one the elevated child can judge"
+                .to_string(),
         ));
     }
 
@@ -598,6 +697,7 @@ pub fn compile(raw: RawRule, pack: &str, xdg: &Xdg) -> Result<Rule, RuleError> {
         recoverable,
         keep_days,
         keep_versions,
+        keep_link,
         requires,
         privilege,
         exclude,
@@ -946,6 +1046,125 @@ privilege = "root"
         assert_eq!(error.kind, RuleErrorKind::UnusedPattern);
     }
 
+    fn versions(id: &str) -> String {
+        format!(
+            r#"
+[[rule]]
+id = "{id}"
+section = "dev-tools"
+kind = "versions"
+root = "{{data}}/tool/versions"
+keep_versions = 1
+keep_link = "{{home}}/.local/bin/tool"
+evidence = "each entry is one complete release and the launcher names the one in use"
+recoverable = true
+keep_days = 0
+privilege = "user"
+"#
+        )
+    }
+
+    #[test]
+    fn a_versions_rule_loads_with_a_count_and_a_launcher() {
+        let set = one(&versions("dev.tool.versions")).expect("loads");
+        let rule = &set.rules()[0];
+        assert_eq!(rule.kind, Kind::Versions);
+        assert_eq!(rule.keep_versions, Some(1));
+        assert_eq!(
+            rule.keep_link.as_ref().map(|link| link.raw()),
+            Some("{home}/.local/bin/tool")
+        );
+    }
+
+    #[test]
+    fn a_versions_rule_needs_both_the_count_and_the_launcher() {
+        let no_count = versions("dev.bad").replace("keep_versions = 1\n", "");
+        let error = first_error(one(&no_count));
+        assert_eq!(error.kind, RuleErrorKind::MissingKeepVersions);
+        assert!(
+            error.message.contains("versions"),
+            "the refusal must name the kind: {}",
+            error.message
+        );
+
+        let no_link = versions("dev.bad").replace("keep_link = \"{home}/.local/bin/tool\"\n", "");
+        let error = first_error(one(&no_link));
+        assert_eq!(error.kind, RuleErrorKind::MissingKeepLink);
+        assert!(
+            error.message.contains("launcher"),
+            "the refusal must say what the field is for: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_versions_count_must_leave_something() {
+        let body = versions("dev.bad").replace("keep_versions = 1", "keep_versions = 0");
+        let error = first_error(one(&body));
+        assert_eq!(error.kind, RuleErrorKind::BadKeepVersions);
+    }
+
+    #[test]
+    fn a_versions_launcher_must_name_one_link() {
+        // A pattern would make "the entry in use" a set, and the scanner would
+        // have to pick one: the field exists to remove that guess.
+        let body = versions("dev.bad").replace(
+            "keep_link = \"{home}/.local/bin/tool\"",
+            "keep_link = \"{home}/.local/bin/tool*\"",
+        );
+        let error = first_error(one(&body));
+        assert_eq!(error.kind, RuleErrorKind::BadKeepLink);
+        assert!(
+            error.message.contains("pattern"),
+            "the refusal must name the problem: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_versions_rule_refuses_a_layout_it_cannot_honour() {
+        // An exclude inside one entry would leave a half-installed version
+        // behind, and max_depth describes a walk the kind does not do.
+        for extra in ["max_depth = 3\n", "exclude = [\"bin/**\"]\n"] {
+            let body = format!("{}{extra}", versions("dev.bad"));
+            let error = first_error(one(&body));
+            assert_eq!(error.kind, RuleErrorKind::VersionsLayout, "{extra}");
+        }
+    }
+
+    #[test]
+    fn only_a_versions_rule_reads_a_keep_link() {
+        let body = format!(
+            "{}\nkeep_link = \"{{home}}/.local/bin/tool\"\n",
+            base("dev.bad")
+        );
+        let error = first_error(one(&body));
+        assert_eq!(error.kind, RuleErrorKind::UnusedKeepLink);
+        assert!(
+            error.message.contains("versions"),
+            "the refusal must say which kind reads it: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_versions_rule_cannot_run_as_root() {
+        // The elevated child's allowlist never names this kind, so a root rule
+        // would plan items it can never apply. Refusing at load says so once,
+        // instead of leaving the user with a preview that cannot run.
+        let body = versions("sys.tool.versions")
+            .replace("section = \"dev-tools\"", "section = \"system\"")
+            .replace("{data}/tool/versions", "/var/cache/tool/versions")
+            .replace("privilege = \"user\"", "privilege = \"root\"");
+        let error = first_error(one(&body));
+        assert_eq!(error.kind, RuleErrorKind::RootPrivilege);
+        assert!(
+            error.message.contains("user-owned"),
+            "the refusal must name the cause: {}",
+            error.message
+        );
+    }
+
     #[test]
     fn a_retention_the_kind_never_reads_is_refused() {
         // `rules list` prints keep_days, so a value the engine ignores would be
@@ -1086,8 +1305,17 @@ privilege = "root"
             RuleErrorKind::MissingPattern,
             RuleErrorKind::UnusedPattern,
             RuleErrorKind::BadPattern,
+            RuleErrorKind::MissingKeepVersions,
+            RuleErrorKind::UnusedKeepVersions,
+            RuleErrorKind::BadKeepVersions,
+            RuleErrorKind::MissingKeepLink,
+            RuleErrorKind::UnusedKeepLink,
+            RuleErrorKind::BadKeepLink,
+            RuleErrorKind::VersionsLayout,
+            RuleErrorKind::IgnoredKeepDays,
             RuleErrorKind::Requirement,
             RuleErrorKind::BadDepth,
+            RuleErrorKind::TrashLayout,
             RuleErrorKind::RootGlob,
         ];
         let mut codes: Vec<&str> = kinds.iter().map(|kind| kind.code()).collect();
