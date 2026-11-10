@@ -421,6 +421,14 @@ The retention is a count plus one fact, not an age:
    leaves the entire entry in place. Half an installed version is worse than a
    whole one, because the launcher may still point at it.
 
+The launcher is read once more after you confirm, because an update can move it
+while the prompt is open. Any planned item the link names now — or that sits
+inside the entry it names — leaves the plan, and a launcher that cannot be read
+at that point takes everything its rule planned with it. The report says which
+rule lost items and why; `keep_link_unknown` marks a rule whose answer
+disappeared. The remaining window — the instant between that read and the
+unlink — is R12 in [`SAFETY.md`](SAFETY.md).
+
 `max_depth` and `exclude` are refused at load (`versions_layout`): an exclude
 inside one entry would produce exactly the half-installed tree the kind exists
 to avoid. The kind is user-owned, so the elevated child never re-derives it, and

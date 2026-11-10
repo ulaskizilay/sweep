@@ -43,7 +43,7 @@ use sweep_core::oplog::{encode_path, rfc3339, Action, Oplog, Record};
 use sweep_core::paths::{first_component, is_within};
 use sweep_core::pkg_cache;
 use sweep_core::privilege::{self, Elevator, SystemElevator};
-use sweep_core::probe::RealProbe;
+use sweep_core::probe::{FsProbe, RealProbe};
 use sweep_core::project;
 use sweep_core::rules::{Kind, Privilege, Rule, RuleSet, Section};
 use sweep_core::scan::{self, BlockKind, Collect, Entry, Limits, Select, Spec, Stop};
@@ -445,7 +445,10 @@ pub fn run(
     };
 
     let mode = if dry_run { Mode::DryRun } else { Mode::Apply };
-    let Built { plan, mut report } = build(
+    let Built {
+        mut plan,
+        mut report,
+    } = build(
         scope,
         &set,
         &xdg,
@@ -499,6 +502,17 @@ pub fn run(
             eprintln!("sweep {command}: {message}");
             return ExitCode::from(crate::EXIT_DECLINED);
         }
+    }
+
+    // The prompt is a window, and a version launcher is a symlink an update
+    // moves. Read it once more now that the answer is in: a re-pointed link
+    // changes no inode, so the funnel's `st_dev`/`st_ino` re-check cannot catch
+    // it. Whatever it names now leaves the plan.
+    withdraw_live_versions(&mut plan, &mut report, &set, &xdg, &probe);
+    if plan.is_empty() {
+        // Everything the user confirmed was withdrawn, so nothing happened and
+        // nothing is recorded. Same rule as a plan that was empty to begin with.
+        return finish(json, verbose, &report, 0);
     }
 
     let session = format!("{command}-{}", now_unix());
@@ -669,6 +683,173 @@ fn privileged_rule_ids(set: &RuleSet) -> BTreeSet<String> {
         .filter(|rule| rule.privilege == Privilege::Root)
         .map(|rule| rule.id.to_string())
         .collect()
+}
+
+/// Withdraws the version entries the launcher names *now*, after consent.
+///
+/// The plan is built before the confirmation prompt, and the launcher is a
+/// symlink an update moves. The funnel re-checks `st_dev`/`st_ino`, which
+/// catches a swapped path but not a re-pointed link: every version entry keeps
+/// its inode while the entry in use changes. So the launcher is read once more
+/// between the answer and the first unlink, and whatever it names leaves the
+/// plan. A rule whose launcher can no longer be read withdraws everything it
+/// planned, because the answer the plan was built from is gone.
+fn withdraw_live_versions(
+    plan: &mut Plan,
+    report: &mut PipelineReport,
+    set: &RuleSet,
+    xdg: &Xdg,
+    probe: &dyn FsProbe,
+) {
+    let mut touched: BTreeSet<String> = BTreeSet::new();
+    let mut unknown: BTreeSet<String> = BTreeSet::new();
+    let mut withdrawn = 0usize;
+    let mut bytes = 0u64;
+
+    for rule in set.rules() {
+        if rule.kind != Kind::Versions {
+            continue;
+        }
+        let Some(keep_link) = rule.keep_link.as_ref().map(|link| link.expand(xdg)) else {
+            continue;
+        };
+        let planned: Vec<(PathBuf, u64)> = plan
+            .items()
+            .iter()
+            .filter(|item| item.rule() == &rule.id)
+            .map(|item| (item.path().to_path_buf(), item.bytes()))
+            .collect();
+        if planned.is_empty() {
+            continue;
+        }
+
+        // A path can be named twice when a glob root resolves to nested
+        // directories, so the withdrawal is collected before it is applied.
+        let mut drop: BTreeMap<PathBuf, u64> = BTreeMap::new();
+        match rule.expanded_roots(xdg) {
+            Ok(roots) => {
+                for root in &roots {
+                    match versions::live_entry(root, &keep_link, probe) {
+                        Ok(live) => {
+                            for (path, size) in &planned {
+                                if path == &live || path.starts_with(&live) {
+                                    drop.insert(path.clone(), *size);
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            // This root's answer is gone; keep everything it
+                            // contributed rather than guess which entry is live.
+                            unknown.insert(rule.id.to_string());
+                            for (path, size) in &planned {
+                                if path.starts_with(root) {
+                                    drop.insert(path.clone(), *size);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                // The pattern resolved when the plan was built and does not
+                // now. Unknown never deletes.
+                unknown.insert(rule.id.to_string());
+                drop.extend(planned.iter().cloned());
+            }
+        }
+        if drop.is_empty() {
+            continue;
+        }
+
+        let rule_withdrawn = drop.len();
+        let rule_bytes: u64 = drop.values().sum();
+        for path in drop.keys() {
+            plan.forget(path);
+        }
+        withdrawn += rule_withdrawn;
+        bytes += rule_bytes;
+        touched.insert(rule.id.to_string());
+
+        if let Some(run) = report
+            .rules
+            .iter_mut()
+            .find(|run| run.id == rule.id.as_str())
+        {
+            let remaining: Vec<u64> = plan
+                .items()
+                .iter()
+                .filter(|item| item.rule().as_str() == run.id)
+                .map(|item| item.bytes())
+                .collect();
+            run.items = remaining.len();
+            run.bytes = remaining.iter().sum();
+            let note = if unknown.contains(&rule.id.to_string()) {
+                "the launcher could not be read after you answered, so nothing this rule \
+                 planned is removed"
+                    .to_string()
+            } else if run.items == 0 {
+                "the launcher now names the entry this rule planned, so it stays in place"
+                    .to_string()
+            } else {
+                format!(
+                    "{rule_withdrawn} {} withdrawn because the launcher moved while the prompt \
+                     was open",
+                    if rule_withdrawn == 1 {
+                        "entry was"
+                    } else {
+                        "entries were"
+                    }
+                )
+            };
+            if run.items == 0 {
+                run.status = if unknown.contains(&rule.id.to_string()) {
+                    Status::KeepLinkUnknown
+                } else {
+                    Status::Empty
+                };
+            }
+            run.detail = Some(match run.detail.take() {
+                Some(detail) => format!("{detail}; {note}"),
+                None => note,
+            });
+        }
+    }
+
+    if withdrawn == 0 {
+        return;
+    }
+
+    plan.finish();
+    report.plan_hash = plan.hash().to_string();
+    report.sections = summarise_sections(&report.rules);
+    report.totals.planned = report
+        .rules
+        .iter()
+        .filter(|run| run.status == Status::Planned)
+        .count();
+    report.totals.skipped = report
+        .rules
+        .iter()
+        .filter(|run| run.status.is_skip())
+        .count();
+    report.totals.items = plan.len();
+    report.totals.bytes = plan.total_bytes();
+    report.notes.push(format!(
+        "{withdrawn} planned {} ({}) left in place: the launcher changed while the prompt was open",
+        if withdrawn == 1 {
+            "item was"
+        } else {
+            "items were"
+        },
+        human_bytes(bytes)
+    ));
+    if !unknown.is_empty() {
+        report.notes.push(format!(
+            "the launcher for {} could not be read after you answered, so nothing it planned is \
+             removed",
+            unknown.iter().cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
 }
 
 /// Hands the root-owned half to the elevated child and folds its answer in.
@@ -2861,6 +3042,194 @@ privilege = "user"
             "planning must not run the funnel"
         );
         assert!(root.join("old.bin").exists(), "planning must not delete");
+    }
+
+    fn versions_body(root: &Path, link: &Path, keep: u32) -> String {
+        format!(
+            r#"
+[[rule]]
+id = "test.tool.versions"
+section = "user-essentials"
+kind = "versions"
+root = "{}"
+keep_versions = {keep}
+keep_link = "{}"
+evidence = "test tree"
+recoverable = true
+privilege = "user"
+"#,
+            root.display(),
+            link.display()
+        )
+    }
+
+    /// One tool with three releases, the launcher on the oldest. With
+    /// `keep_versions = 1` the middle one is the only planned entry: the oldest
+    /// is live and the newest is the count.
+    struct VersionsPlan {
+        _temp: tempfile::TempDir,
+        root: PathBuf,
+        launcher: PathBuf,
+        plan: Plan,
+        report: PipelineReport,
+        set: RuleSet,
+        xdg: Xdg,
+        probe: RealProbe,
+    }
+
+    fn versions_plan() -> VersionsPlan {
+        let temp = tree(&[]);
+        let root = temp.path().join("share/tool/versions");
+        std::fs::create_dir_all(&root).expect("mkdir");
+        for name in ["1.0.0", "2.0.0", "3.0.0"] {
+            let path = root.join(name);
+            std::fs::write(&path, "body").expect("write");
+            age(&path, 90);
+        }
+        let launcher = temp.path().join("bin/tool");
+        std::fs::create_dir_all(launcher.parent().expect("parent")).expect("mkdir");
+        std::os::unix::fs::symlink(root.join("1.0.0"), &launcher).expect("symlink");
+
+        let xdg = xdg_at(temp.path());
+        let body = versions_body(&root, &launcher, 1);
+        let set =
+            RuleSet::from_sources(&[sweep_core::rules::Source::new("test.toml", &body)], &xdg)
+                .expect("rule pack loads");
+        let mounts = MountTable::load().expect("mounts");
+        let probe = RealProbe::new().expect("probe").with_open_scan();
+        let Built { plan, report } = build(
+            Scope::CLEAN,
+            &set,
+            &xdg,
+            &probe,
+            &mounts,
+            &[],
+            &Limits::default(),
+            Mode::Apply,
+            &sweep_core::ignore::Ignore::empty(&xdg.home),
+        );
+        VersionsPlan {
+            _temp: temp,
+            root,
+            launcher,
+            plan,
+            report,
+            set,
+            xdg,
+            probe,
+        }
+    }
+
+    fn repoint(launcher: &Path, target: &Path) {
+        std::fs::remove_file(launcher).expect("unlink");
+        std::os::unix::fs::symlink(target, launcher).expect("symlink");
+    }
+
+    #[test]
+    fn a_launcher_that_moves_while_the_prompt_is_open_takes_its_entry_with_it() {
+        let mut fixture = versions_plan();
+        assert_eq!(fixture.plan.len(), 1, "only the middle release is planned");
+        let planned = fixture.plan.items()[0].path().to_path_buf();
+        assert_eq!(planned, fixture.root.join("2.0.0"));
+
+        // The update finishes while the prompt is open: the link now names the
+        // entry the plan was about to remove. The inode did not change, so the
+        // funnel's re-check cannot catch this.
+        repoint(&fixture.launcher, &planned);
+
+        withdraw_live_versions(
+            &mut fixture.plan,
+            &mut fixture.report,
+            &fixture.set,
+            &fixture.xdg,
+            &fixture.probe,
+        );
+
+        assert!(
+            fixture.plan.is_empty(),
+            "the entry the launcher names must leave the plan: {:?}",
+            fixture.plan.items()
+        );
+        assert!(planned.exists(), "the re-check must not remove anything");
+        let run = fixture
+            .report
+            .rules
+            .iter()
+            .find(|run| run.id == "test.tool.versions")
+            .expect("run");
+        assert_eq!(run.status, Status::Empty);
+        assert_eq!(run.items, 0);
+        assert_eq!(run.bytes, 0);
+        assert_eq!(fixture.report.totals.items, 0);
+        assert_eq!(fixture.report.totals.bytes, 0);
+        assert!(
+            fixture
+                .report
+                .notes
+                .iter()
+                .any(|note| note.contains("launcher changed")),
+            "the withdrawal must be explained: {:?}",
+            fixture.report.notes
+        );
+    }
+
+    #[test]
+    fn a_launcher_that_cannot_be_read_after_consent_keeps_everything_the_rule_planned() {
+        let mut fixture = versions_plan();
+        assert_eq!(fixture.plan.len(), 1);
+        std::fs::remove_file(&fixture.launcher).expect("unlink");
+
+        withdraw_live_versions(
+            &mut fixture.plan,
+            &mut fixture.report,
+            &fixture.set,
+            &fixture.xdg,
+            &fixture.probe,
+        );
+
+        assert!(
+            fixture.plan.is_empty(),
+            "an unreadable launcher makes the live entry unknown, and unknown never deletes"
+        );
+        let run = fixture
+            .report
+            .rules
+            .iter()
+            .find(|run| run.id == "test.tool.versions")
+            .expect("run");
+        assert_eq!(run.status, Status::KeepLinkUnknown);
+        assert!(
+            fixture
+                .report
+                .notes
+                .iter()
+                .any(|note| note.contains("could not be read")),
+            "the reason must be in the report: {:?}",
+            fixture.report.notes
+        );
+    }
+
+    #[test]
+    fn a_launcher_that_moves_to_an_already_kept_entry_changes_nothing() {
+        let mut fixture = versions_plan();
+        let hash = fixture.report.plan_hash.clone();
+        repoint(&fixture.launcher, &fixture.root.join("3.0.0"));
+
+        withdraw_live_versions(
+            &mut fixture.plan,
+            &mut fixture.report,
+            &fixture.set,
+            &fixture.xdg,
+            &fixture.probe,
+        );
+
+        assert_eq!(fixture.plan.len(), 1, "the planned entry is still not live");
+        assert_eq!(fixture.report.plan_hash, hash);
+        assert!(
+            fixture.report.notes.is_empty(),
+            "a re-check that withdraws nothing must stay quiet: {:?}",
+            fixture.report.notes
+        );
     }
 
     #[test]

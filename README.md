@@ -167,7 +167,9 @@ a launcher symlink pointing at the one in use. It keeps the newest
 `keep_versions` entries **and** the launcher's target, and plans nothing at all
 when the launcher is missing, is not a symlink, dangles, or points outside the
 directory: "keep the newest" is a guess about which release is live, while the
-link is the statement. A directory entry is taken whole, never in part.
+link is the statement. The link is read once more after you confirm, because an
+update can move it while the prompt is open, and anything it names by then
+leaves the plan. A directory entry is taken whole, never in part.
 
 A root segment may contain `*` or `?` when a tool puts its version in the
 directory name: `{cache}/Google/AndroidStudio*` is one rule that finds every

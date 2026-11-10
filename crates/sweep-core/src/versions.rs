@@ -117,6 +117,46 @@ pub fn is_version_name(name: &[u8]) -> bool {
     })
 }
 
+/// The entry the launcher names right now, or why that cannot be known.
+///
+/// Shared by the scanner and by the post-consent re-check: the two must reach
+/// the same answer, or a re-check would withdraw an item the plan never meant
+/// to keep — or, worse, miss the one it did.
+pub fn live_entry(
+    root: &Path,
+    keep_link: &Path,
+    probe: &dyn FsProbe,
+) -> Result<PathBuf, KeepLinkProblem> {
+    let canonical_root = probe
+        .canonicalize(root)
+        .map_err(|_| KeepLinkProblem::Unresolved)?;
+    match probe.symlink_metadata(keep_link) {
+        Ok(meta) if !meta.is_symlink() => return Err(KeepLinkProblem::NotALink),
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(KeepLinkProblem::Missing)
+        }
+        Err(_) => return Err(KeepLinkProblem::Unresolved),
+    }
+    // `canonicalize` resolves the whole chain, so a launcher that is itself a
+    // link to a link still lands on the entry.
+    let resolved = probe
+        .canonicalize(keep_link)
+        .map_err(|_| KeepLinkProblem::Unresolved)?;
+    // The entry name, not the full path: the walk produces paths built from
+    // `root`, while `canonicalize` returns the physical path. If an ancestor
+    // such as `~/.local` is a symlink the two spellings differ, and comparing
+    // whole paths would silently stop protecting the live entry - which is the
+    // one deletion this kind exists to prevent.
+    let live_name = resolved
+        .strip_prefix(&canonical_root)
+        .ok()
+        .and_then(|relative| relative.components().next())
+        .map(|component| component.as_os_str().to_owned())
+        .ok_or(KeepLinkProblem::OutsideRoot)?;
+    Ok(root.join(live_name))
+}
+
 /// Walks one version directory. Read-only: nothing is unlinked or followed.
 pub fn scan(
     root: &Path,
@@ -185,54 +225,15 @@ pub fn scan(
     out.unrecognised = blocked.len();
 
     // The launcher is read before any ranking, because a missing answer makes
-    // every ranking a guess. `canonicalize` resolves the whole chain, so a
-    // launcher that is itself a link to a link still lands on the entry.
-    let canonical_root = match probe.canonicalize(root) {
-        Ok(path) => path,
-        Err(_) => {
-            out.keep_link_problem = Some(KeepLinkProblem::Unresolved);
+    // every ranking a guess.
+    let live = match live_entry(root, keep_link, probe) {
+        Ok(live) => live,
+        Err(problem) => {
+            out.keep_link_problem = Some(problem);
             return out;
         }
     };
-    match probe.symlink_metadata(keep_link) {
-        Ok(meta) if !meta.is_symlink() => {
-            out.keep_link_problem = Some(KeepLinkProblem::NotALink);
-            return out;
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            out.keep_link_problem = Some(KeepLinkProblem::Missing);
-            return out;
-        }
-        Err(_) => {
-            out.keep_link_problem = Some(KeepLinkProblem::Unresolved);
-            return out;
-        }
-    }
-    let resolved = match probe.canonicalize(keep_link) {
-        Ok(path) => path,
-        Err(_) => {
-            out.keep_link_problem = Some(KeepLinkProblem::Unresolved);
-            return out;
-        }
-    };
-    // The entry name, not the full path: the walk below produces paths built
-    // from `root`, while `canonicalize` returns the physical path. If an
-    // ancestor such as `~/.local` is a symlink the two spellings differ, and
-    // comparing whole paths would silently stop protecting the live entry -
-    // which is the one deletion this kind exists to prevent.
-    let live_name = match resolved.strip_prefix(&canonical_root) {
-        Ok(relative) => relative
-            .components()
-            .next()
-            .map(|component| component.as_os_str().to_owned()),
-        Err(_) => None,
-    };
-    let Some(live_name) = live_name else {
-        out.keep_link_problem = Some(KeepLinkProblem::OutsideRoot);
-        return out;
-    };
-    out.live = Some(root.join(&live_name));
+    out.live = Some(live.clone());
 
     // Group the children that are versions, keeping the index so the candidate
     // can carry the metadata the walk already read.
@@ -270,11 +271,7 @@ pub fn scan(
             && versions[..keep.min(versions.len())]
                 .iter()
                 .any(|(kept, _)| vercmp(kept, name) == std::cmp::Ordering::Equal);
-        if entry.path.file_name() == Some(live_name.as_os_str())
-            || entry.mtime >= cutoff
-            || rank < keep
-            || tied_with_a_kept_one
-        {
+        if entry.path == live || entry.mtime >= cutoff || rank < keep || tied_with_a_kept_one {
             out.kept += 1;
             continue;
         }
