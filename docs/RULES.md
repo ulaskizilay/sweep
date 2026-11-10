@@ -394,9 +394,10 @@ is not installed.
 
 Some tools install each release beside the last one and leave a launcher symlink
 pointing at the release in use: `~/.local/share/claude/versions/2.1.319` for one
-executable, `~/.local/share/cursor-agent/versions/<build>/` for a whole tree.
-Those entries are not caches - nothing regenerates them - but they are also no
-longer the installed tool, and each one is the size of the program.
+executable, `~/.local/share/cursor-agent/versions/<build>/` and
+`~/.codex/packages/standalone/releases/<build>/` for a whole tree. Those entries
+are not caches - nothing regenerates them - but they are also no longer the
+installed tool, and each one is the size of the program.
 
 The retention is a count plus one fact, not an age:
 
@@ -419,7 +420,10 @@ The retention is a count plus one fact, not an age:
 6. An entry that is a directory is taken whole. It is walked completely first;
    a walk that could not finish, or that holds a path the ignore file protects,
    leaves the entire entry in place. Half an installed version is worse than a
-   whole one, because the launcher may still point at it.
+   whole one, because the launcher may still point at it. A link **inside** the
+   entry is part of the tree and is planned as a link - the `codex` release keeps
+   `codex` pointing at its real binary - so the directory is not left non-empty
+   at the sink.
 
 The launcher is read once more after you confirm, because an update can move it
 while the prompt is open. Any planned item the link names now — or that sits

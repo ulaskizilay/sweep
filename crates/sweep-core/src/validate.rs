@@ -94,10 +94,11 @@ pub struct Policy {
     pub allow_snapshot_paths: bool,
     /// Whether a target that is itself a symbolic link may be unlinked.
     ///
-    /// Off for `clean`: a link inside a cache root is usually the user's own
-    /// arrangement, and removing it frees nothing. On for a whole-tree sweep of
-    /// a build artifact, where the package manager wrote the links and the tree
-    /// is not rebuildable while they remain.
+    /// Off by default: a link inside a cache root is usually the user's own
+    /// arrangement, and removing it frees nothing. Two walks turn it on: a
+    /// whole-tree sweep of a build artifact, and the tree inside a version
+    /// entry, where the installer wrote the links and the tree is not
+    /// rebuildable while they remain.
     ///
     /// Even when allowed, only the link is removed. The sink unlinks with
     /// `unlinkat(..., 0)`, which never follows, and the plan records that the

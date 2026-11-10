@@ -1129,7 +1129,9 @@ fn build(
         // and a sweep that leaves them behind leaves a tree that still looks
         // installed. The flag alone cannot put a link in a plan - only the
         // artifact walk emits one - and the sink unlinks the link, never its
-        // target. Every other command keeps the refusal.
+        // target. A `versions` entry sets the same flag for its own walk, per
+        // rule, because a release tree holds its own links; every other command
+        // keeps the refusal.
         policy: Policy {
             allow_leaf_symlink: sections.contains(&Section::ProjectArtifacts),
             ..Policy::default()
@@ -2162,11 +2164,26 @@ fn execute_versions(
 
     let mut walk_skipped = 0usize;
     let mut ignored_entries = 0usize;
+    // A release tree is removed whole, and its installer writes links inside it:
+    // the standalone `codex` release is a directory holding `codex` as a link to
+    // the real binary. Refusing that link would leave the directory non-empty at
+    // the sink, so the user would get "directory not empty" for a removal the
+    // plan promised. The flag is per rule, not per run: only this walk emits a
+    // link, and the sink unlinks the link without ever following it.
+    let tree_ctx = ValidateCtx {
+        xdg: ctx.xdg,
+        probe: ctx.probe,
+        allowed: ctx.allowed,
+        policy: Policy {
+            allow_leaf_symlink: true,
+            ..ctx.policy
+        },
+    };
     for candidate in &found.candidates {
         if !candidate.is_dir {
             plan_candidates(
                 plan,
-                ctx,
+                &tree_ctx,
                 rule,
                 &mut run,
                 std::iter::once(candidate.path.as_path()),
@@ -2204,7 +2221,7 @@ fn execute_versions(
             .map(|entry| entry.path.as_path())
             .collect();
         paths.push(candidate.path.as_path());
-        plan_candidates(plan, ctx, rule, &mut run, paths);
+        plan_candidates(plan, &tree_ctx, rule, &mut run, paths);
     }
 
     run.ignored = ignored_entries;
@@ -3229,6 +3246,68 @@ privilege = "user"
             fixture.report.notes.is_empty(),
             "a re-check that withdraws nothing must stay quiet: {:?}",
             fixture.report.notes
+        );
+    }
+
+    #[test]
+    fn a_version_tree_that_holds_a_link_is_planned_whole() {
+        // The standalone `codex` release keeps `codex` as a link to the real
+        // binary inside the release directory. Refusing the link would leave the
+        // directory non-empty at the sink, and the user would get "directory not
+        // empty" for a removal the plan promised.
+        let temp = tree(&[]);
+        let root = temp.path().join("releases");
+        let old = root.join("0.154.0-x86_64-unknown-linux-musl");
+        std::fs::create_dir_all(old.join("bin")).expect("mkdir");
+        std::fs::write(old.join("bin/codex-real"), "body").expect("write");
+        std::os::unix::fs::symlink("bin/codex-real", old.join("codex")).expect("symlink");
+        let live = root.join("0.160.0-x86_64-unknown-linux-musl");
+        std::fs::create_dir_all(&live).expect("mkdir");
+        std::fs::write(live.join("codex"), "body").expect("write");
+        age(&old, 90);
+        age(&live, 90);
+        let launcher = temp.path().join("current");
+        std::os::unix::fs::symlink(&live, &launcher).expect("symlink");
+
+        let xdg = xdg_at(temp.path());
+        let body = versions_body(&root, &launcher, 1);
+        let set =
+            RuleSet::from_sources(&[sweep_core::rules::Source::new("test.toml", &body)], &xdg)
+                .expect("rule pack loads");
+        let mounts = MountTable::load().expect("mounts");
+        let probe = RealProbe::new().expect("probe").with_open_scan();
+        let Built { plan, .. } = build(
+            Scope::CLEAN,
+            &set,
+            &xdg,
+            &probe,
+            &mounts,
+            &[],
+            &Limits::default(),
+            Mode::Apply,
+            &sweep_core::ignore::Ignore::empty(&xdg.home),
+        );
+
+        assert!(
+            plan.denied().is_empty(),
+            "a link inside a release tree must not be refused: {:?}",
+            plan.denied()
+        );
+        let link = plan
+            .items()
+            .iter()
+            .find(|item| item.path() == old.join("codex"))
+            .expect("the link is part of the tree");
+        assert!(link.is_symlink(), "the plan must record that it is a link");
+        assert!(
+            plan.items().iter().any(|item| item.path() == old),
+            "the release directory itself is planned"
+        );
+        assert!(
+            plan.items()
+                .iter()
+                .all(|item| !item.path().starts_with(&live)),
+            "the live release stays"
         );
     }
 

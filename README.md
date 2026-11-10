@@ -24,7 +24,7 @@
 > the plan, asks once, then deletes through the single funnel and writes one
 > operation-log row per decision;
 > `--dry-run` stops before the question and writes nothing at all. The catalog is
-> 134 rules over sixteen sections, and the section whose loss may not be
+> 135 rules over sixteen sections, and the section whose loss may not be
 > recoverable — downloaded model weights — is skipped unless you name it. System
 > caches are swept through a second process: `sweep` never runs as root, so it
 > plans as you and asks before elevating.
@@ -111,19 +111,19 @@ is in [`docs/SAFETY.md`](docs/SAFETY.md).
 ## The rules
 
 The catalog is TOML, and it is data rather than code: `rules/01-system.toml`
-through `rules/16-model-caches.toml`, 134 rules over sixteen sections, 120
+through `rules/16-model-caches.toml`, 135 rules over sixteen sections, 121
 enabled in this build. Each rule names a root, a kind, a retention and the
 sentence that justifies deleting there.
 
 ```bash
 $ sweep rules list
-sweep rules — 16 packs, 134 rules, 120 enabled
+sweep rules — 16 packs, 135 rules, 121 enabled
 
   section            rules  enabled
   system                 8        5
   user-essentials        6        6
   ...
-  dev-tools             47       47
+  dev-tools             48       48
   ...
   model-caches           3        3  opt-in
 

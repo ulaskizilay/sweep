@@ -634,3 +634,24 @@ recoverable = true
 keep_days = 0
 requires = ["dir:{home}/.local/share/cursor-agent/versions"]
 privilege = "user"
+
+# The standalone `codex` installer has the same shape one directory up: every
+# release is a tree under `releases/` and `current` names the one in use. The
+# tree holds its own link (`<release>/codex` points at the real binary), which is
+# why the kind removes a release whole rather than file by file. 324 MiB for
+# 0.154.0 and 427 MiB for 0.160.0 on this machine. `keep_days = 7` is the one
+# rule here with a floor, because the CLI updates itself: a downgrade that has
+# unpacked an older release but not yet moved `current` is not the newest, and
+# the floor is what keeps it until the link catches up.
+[[rule]]
+id = "dev.codex.versions"
+section = "dev-tools"
+kind = "versions"
+root = "{home}/.codex/packages/standalone/releases"
+keep_versions = 1
+keep_link = "{home}/.codex/packages/standalone/current"
+evidence = "Each entry is one complete release tree; `current` names the release in use and the self-updater writes a new tree instead of editing one, so only an older copy of the same program is removed."
+recoverable = true
+keep_days = 7
+requires = ["dir:{home}/.codex/packages/standalone/releases"]
+privilege = "user"
