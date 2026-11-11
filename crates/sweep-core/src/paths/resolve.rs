@@ -47,6 +47,73 @@ pub fn normalize(path: &Path) -> PathBuf {
     out
 }
 
+/// True when `child` is `parent` or lives underneath it, for two paths that are
+/// already [`normalize`]d.
+///
+/// The answer is the one [`is_within`] gives, decided by a byte prefix plus a
+/// separator boundary instead of a component walk. It exists because this
+/// question is asked a few hundred times per candidate - once per mount in the
+/// table, once per protected root, once per identity directory - and a cache
+/// with a million files makes the difference between 140ns and 5ns visible:
+/// it was two thirds of the time `sweep clean` spent deciding.
+///
+/// `parent` and `child` must be absolute, without `.` or `..` components and
+/// without a trailing separator; [`normalize`] produces exactly that. Use
+/// [`is_within`] for anything else.
+pub fn is_within_normalized(parent: &Path, child: &Path) -> bool {
+    let parent = without_trailing_separator(parent.as_os_str().as_bytes());
+    let child = child.as_os_str().as_bytes();
+    if !child.starts_with(parent) {
+        return false;
+    }
+    if child.len() == parent.len() {
+        return true;
+    }
+    // A prefix that stops in the middle of a name is not a directory boundary:
+    // `/home/u` does not cover `/home/u2`.
+    parent.is_empty() || parent == b"/" || child[parent.len()] == b'/'
+}
+
+/// True when `child` is `base/name` or lives underneath it.
+///
+/// `base` must be absolute and [`normalize`]d; `name` is one component or a
+/// `a/b` suffix with no leading or trailing separator. Equivalent to
+/// `is_within(&base.join(name), child)` without building the joined path, which
+/// is what makes it usable once per candidate in [`crate::policy`].
+pub fn is_within_named(base: &Path, child: &Path, name: &str) -> bool {
+    let base = without_trailing_separator(base.as_os_str().as_bytes());
+    let child = child.as_os_str().as_bytes();
+    let name = name.as_bytes();
+    if base.is_empty() {
+        // `Path::new("").join("a")` is relative, so it covers no absolute path.
+        return false;
+    }
+    let offset = if base == b"/" {
+        if !child.starts_with(b"/") {
+            return false;
+        }
+        1
+    } else {
+        if !child.starts_with(base) {
+            return false;
+        }
+        match child.get(base.len()) {
+            Some(b'/') => base.len() + 1,
+            _ => return false,
+        }
+    };
+    let rest = &child[offset..];
+    rest.starts_with(name) && (rest.len() == name.len() || rest[name.len()] == b'/')
+}
+
+/// Drops one trailing separator, keeping the root marker itself intact.
+fn without_trailing_separator(bytes: &[u8]) -> &[u8] {
+    match bytes.split_last() {
+        Some((b'/', rest)) if !rest.is_empty() => rest,
+        _ => bytes,
+    }
+}
+
 /// True when `child` is `parent` or lives underneath it.
 ///
 /// Component-wise, so `/home/u2` is **not** considered inside `/home/u`
@@ -176,5 +243,59 @@ mod tests {
         assert_eq!(depth(Path::new("/")), 0);
         assert_eq!(depth(Path::new("/a")), 1);
         assert_eq!(depth(Path::new("/a/b/c")), 3);
+    }
+
+    /// Every normalized absolute path of up to three components drawn from a
+    /// set that contains the pairs a byte prefix gets wrong: `a` / `ab`,
+    /// `a` / `a.b`, `a` / `a-b`, and a name with a multi-byte character.
+    fn normalized_corpus() -> Vec<PathBuf> {
+        let names = ["a", "ab", "a.b", "a-b", "b", "@snapshots", "é"];
+        let mut out = vec![PathBuf::from("/")];
+        for first in names {
+            out.push(PathBuf::from(format!("/{first}")));
+            for second in names {
+                out.push(PathBuf::from(format!("/{first}/{second}")));
+                for third in names {
+                    out.push(PathBuf::from(format!("/{first}/{second}/{third}")));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_byte_prefix_test_agrees_with_the_component_walk() {
+        let corpus = normalized_corpus();
+        for parent in &corpus {
+            for child in &corpus {
+                assert_eq!(
+                    is_within(parent, child),
+                    is_within_normalized(parent, child),
+                    "{} vs {}",
+                    parent.display(),
+                    child.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_named_child_test_agrees_with_a_joined_path() {
+        let corpus = normalized_corpus();
+        for base in &corpus {
+            for name in ["a", "a.b", "ab", "@snapshots", "a/b"] {
+                let joined = base.join(name);
+                for child in &corpus {
+                    assert_eq!(
+                        is_within(&joined, child),
+                        is_within_named(base, child, name),
+                        "{} joined with {} vs {}",
+                        base.display(),
+                        name,
+                        child.display()
+                    );
+                }
+            }
+        }
     }
 }

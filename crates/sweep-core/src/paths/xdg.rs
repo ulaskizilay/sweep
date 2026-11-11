@@ -8,7 +8,7 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-use super::resolve::{has_control_bytes, has_parent_component};
+use super::resolve::{has_control_bytes, has_parent_component, normalize};
 
 /// Resolved base directories plus any warnings produced while resolving them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +57,11 @@ impl Xdg {
         if !home.is_absolute() || is_usable_base(&home).is_err() {
             return Err(XdgError::HomeNotAbsolute(home));
         }
+        // Every base is normalized before it leaves here. The hot path compares
+        // them byte-wise (`is_within_named`, `is_within_normalized`), which is
+        // only the same answer as a component walk for normalized paths, and
+        // `HOME=/home/u/` would otherwise stop protecting `~/.ssh`.
+        let home = normalize(&home);
 
         let mut warnings = Vec::new();
         let cache = pick(
@@ -94,7 +99,7 @@ impl Xdg {
                     ));
                     PathBuf::from(format!("/run/user/{}", crate::sys::euid()))
                 } else {
-                    path
+                    normalize(&path)
                 }
             }
             None => PathBuf::from(format!("/run/user/{}", crate::sys::euid())),
@@ -147,7 +152,7 @@ fn pick(
     }
     let path = PathBuf::from(value);
     match is_usable_base(&path) {
-        Ok(()) => path,
+        Ok(()) => normalize(&path),
         Err(reason) => {
             warnings.push(format!(
                 "{name} ignored ({reason}); using {}",
@@ -208,6 +213,24 @@ mod tests {
         assert_eq!(xdg.state, PathBuf::from("/home/u/.local/state"));
         assert_eq!(xdg.state_dir(), PathBuf::from("/home/u/.local/state/sweep"));
         assert!(xdg.warnings.is_empty());
+    }
+
+    #[test]
+    fn every_base_is_normalized() {
+        // The hot path compares these byte-wise, so a trailing separator or a
+        // doubled one has to be gone before anything else sees them. Otherwise
+        // `HOME=/home/u/` would stop protecting `~/.ssh`: the byte prefix
+        // `/home/u/.ssh` does not start with `/home/u//`.
+        let xdg = resolve(&[
+            ("HOME", "/home/u/"),
+            ("XDG_CACHE_HOME", "/home/u//cache/"),
+            ("XDG_RUNTIME_DIR", "/run/user/1000/"),
+        ]);
+        assert_eq!(xdg.home, PathBuf::from("/home/u"));
+        assert_eq!(xdg.cache, PathBuf::from("/home/u/cache"));
+        assert_eq!(xdg.runtime, PathBuf::from("/run/user/1000"));
+        assert_eq!(xdg.config, PathBuf::from("/home/u/.config"));
+        assert_eq!(xdg.state, PathBuf::from("/home/u/.local/state"));
     }
 
     #[test]

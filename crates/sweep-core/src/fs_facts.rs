@@ -13,9 +13,10 @@
 //! facts rather than from a build-time assumption.
 
 use std::io;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use crate::paths::{is_within, normalize};
+use crate::paths::{is_within_named, is_within_normalized, normalize};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FsType {
@@ -101,6 +102,8 @@ pub struct MountInfo {
     pub parent_id: u32,
     pub device: (u32, u32),
     pub root: PathBuf,
+    /// Normalized at parse time, so the prefix test in [`MountTable::find`] can
+    /// be a byte comparison instead of a component walk.
     pub mount_point: PathBuf,
     pub options: MountOptions,
     pub fstype: FsType,
@@ -145,19 +148,64 @@ impl MountTable {
 
     /// The mount whose mount point is the longest prefix of `path`.
     pub fn find(&self, path: &Path) -> Option<&MountInfo> {
+        self.placement(path).map(|placement| placement.mount)
+    }
+
+    /// The mount covering `path`, and whether `path` is itself a mount point.
+    ///
+    /// One pass over the table answers both questions. `is_mount_point` is a
+    /// separate lookup only because callers used to ask it separately: the
+    /// longest matching prefix of a path that is a mount point *is* that mount
+    /// point, so the equality is already in hand.
+    ///
+    /// Every candidate path goes through here, so the prefix test is
+    /// [`is_within_normalized`]: a byte comparison against the mount point,
+    /// which [`MountTable::parse`] normalized.
+    pub fn placement(&self, path: &Path) -> Option<Placement<'_>> {
         let normalized = normalize(path);
-        self.mounts
+        self.placement_normalized(&normalized)
+    }
+
+    /// [`MountTable::placement`] for a path that is already normalized.
+    pub fn placement_normalized(&self, normalized: &Path) -> Option<Placement<'_>> {
+        let mount = self
+            .mounts
             .iter()
-            .find(|mount| is_within(&mount.mount_point, &normalized))
+            .find(|mount| is_within_normalized(&mount.mount_point, normalized))?;
+        Some(Placement {
+            mount,
+            is_mount_point: mount.mount_point == normalized,
+        })
     }
 
     /// True when `path` is exactly a mount point. Such a path is never a
     /// deletion target: removing it would either fail or cross a boundary.
     pub fn is_mount_point(&self, path: &Path) -> bool {
-        let normalized = normalize(path);
-        self.mounts
-            .iter()
-            .any(|mount| mount.mount_point == normalized)
+        self.placement(path)
+            .is_some_and(|placement| placement.is_mount_point)
+    }
+
+    /// True when `path` is inside a directory that holds whole-filesystem
+    /// snapshots, on the mount it lives on.
+    pub fn is_snapshot_path(&self, path: &Path) -> bool {
+        self.is_snapshot_path_normalized(&normalize(path))
+    }
+
+    /// [`MountTable::is_snapshot_path`] for a path that is already normalized.
+    ///
+    /// The exact test needs the covering mount's path, and building it per
+    /// candidate is what made this expensive. Every snapshot directory name
+    /// contains `snapshots` or `timeshift`, so a path that contains neither
+    /// cannot be inside one and the mount lookup is skipped entirely.
+    pub fn is_snapshot_path_normalized(&self, normalized: &Path) -> bool {
+        let bytes = normalized.as_os_str().as_bytes();
+        if !contains(bytes, b"snapshots") && !contains(bytes, b"timeshift") {
+            return false;
+        }
+        let Some(placement) = self.placement_normalized(normalized) else {
+            return false;
+        };
+        is_snapshot_path_under(&placement.mount.mount_point, normalized)
     }
 
     /// Measured facts for `path`, or `None` when no mount covers it.
@@ -174,22 +222,56 @@ impl MountTable {
     }
 }
 
+/// What the mount table says about one path.
+#[derive(Debug, Clone, Copy)]
+pub struct Placement<'a> {
+    pub mount: &'a MountInfo,
+    /// The path is the mount point itself, not merely inside it.
+    pub is_mount_point: bool,
+}
+
 /// Directories that hold whole-filesystem snapshots. They are protected even
 /// when they do not exist yet, so a snapshot created mid-run cannot be swept.
+const SNAPSHOT_ROOTS: [&str; 4] = [
+    "/.snapshots",
+    "/@snapshots",
+    "/timeshift",
+    "/var/lib/timeshift",
+];
+
+/// Snapshot directory names a filesystem keeps at the top of its mount point.
+const SNAPSHOT_NAMES: [&str; 2] = [".snapshots", "@snapshots"];
+
 fn snapshot_candidates(mount_point: &Path) -> Vec<PathBuf> {
-    let mut out = vec![
-        PathBuf::from("/.snapshots"),
-        PathBuf::from("/@snapshots"),
-        PathBuf::from("/timeshift"),
-        PathBuf::from("/var/lib/timeshift"),
-    ];
-    for name in [".snapshots", "@snapshots"] {
+    let mut out: Vec<PathBuf> = SNAPSHOT_ROOTS.iter().map(PathBuf::from).collect();
+    for name in SNAPSHOT_NAMES {
         let candidate = mount_point.join(name);
         if !out.contains(&candidate) {
             out.push(candidate);
         }
     }
     out
+}
+
+/// The exact snapshot test, without building the candidate list.
+///
+/// `path` must be normalized. Used by [`MountTable::is_snapshot_path`], which
+/// runs once per candidate and cannot afford a `Vec` of six paths each time.
+fn is_snapshot_path_under(mount_point: &Path, path: &Path) -> bool {
+    SNAPSHOT_ROOTS
+        .iter()
+        .any(|root| is_within_normalized(Path::new(root), path))
+        || SNAPSHOT_NAMES
+            .iter()
+            .any(|name| is_within_named(mount_point, path, name))
+}
+
+/// Substring search, used to skip the snapshot lookup for the overwhelming
+/// majority of paths that cannot be inside a snapshot directory.
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -204,11 +286,13 @@ pub struct FsFacts {
 
 impl FsFacts {
     /// True when `path` is inside a snapshot directory. Report-only territory.
+    ///
+    /// [`FsFacts::snapshot_candidates`] is the same list in the form `sweep
+    /// doctor` prints; the decision goes through the shared test so the printed
+    /// list and the refusal cannot drift apart.
     pub fn is_snapshot_path(&self, path: &Path) -> bool {
         let normalized = normalize(path);
-        self.snapshot_candidates
-            .iter()
-            .any(|candidate| is_within(candidate, &normalized))
+        is_snapshot_path_under(&self.mount_point, &normalized)
     }
 }
 
@@ -219,7 +303,7 @@ fn parse_line(line: &str) -> Option<MountInfo> {
     let parent_id = fields.next()?.parse().ok()?;
     let device = parse_device(fields.next()?)?;
     let root = PathBuf::from(unescape(fields.next()?));
-    let mount_point = PathBuf::from(unescape(fields.next()?));
+    let mount_point = normalize(&PathBuf::from(unescape(fields.next()?)));
     let options = parse_options(fields.next()?);
 
     let mut rest = after.split(' ');

@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use crate::fs_facts::MountTable;
 use crate::meta::Meta;
-use crate::paths::{has_control_bytes, has_parent_component, is_within, normalize, Xdg};
+use crate::paths::{has_control_bytes, has_parent_component, is_within_normalized, normalize, Xdg};
 use crate::policy;
 use crate::probe::FsProbe;
 
@@ -332,7 +332,7 @@ pub fn validate(path: &Path, ctx: &ValidateCtx<'_>) -> Verdict {
     let Some(allowed) = ctx
         .allowed
         .iter()
-        .find(|root| is_within(&root.path, &literal))
+        .find(|root| is_within_normalized(&root.path, &literal))
     else {
         return deny(Reason::NotInAllowedRoot);
     };
@@ -351,16 +351,22 @@ pub fn validate(path: &Path, ctx: &ValidateCtx<'_>) -> Verdict {
     }
 
     // ---- 4. Mount facts on the literal path. ----
-    let Some(facts) = ctx.probe.mount_table().facts(&literal) else {
+    //
+    // One lookup answers both "which mount" and "is this the mount point
+    // itself". It used to be two scans of the table per candidate, and a cache
+    // with a million files makes that the difference between a preview and a
+    // coffee break.
+    let table = ctx.probe.mount_table();
+    let Some(placement) = table.placement_normalized(&literal) else {
         return deny(Reason::UnknownMount);
     };
-    if facts.options.read_only {
+    if placement.mount.options.read_only {
         return deny(Reason::ReadOnlyMount);
     }
-    if facts.is_snapshot_path(&literal) && !ctx.policy.allow_snapshot_paths {
+    if table.is_snapshot_path_normalized(&literal) && !ctx.policy.allow_snapshot_paths {
         return deny(Reason::SnapshotPath);
     }
-    if ctx.probe.mount_table().is_mount_point(&literal) {
+    if placement.is_mount_point {
         return deny(Reason::Mounted);
     }
 
@@ -383,22 +389,31 @@ pub fn validate(path: &Path, ctx: &ValidateCtx<'_>) -> Verdict {
         if policy::match_identity(&physical, ctx.xdg).is_some() {
             return deny(Reason::SymlinkAncestorEscape(physical.clone()));
         }
-        let Some(physical_facts) = ctx.probe.mount_table().facts(&physical) else {
+        let Some(physical_placement) = table.placement(&physical) else {
             return deny(Reason::UnknownMount);
         };
-        if physical_facts.options.read_only {
+        if physical_placement.mount.options.read_only {
             return deny(Reason::ReadOnlyMount);
         }
-        if physical_facts.is_snapshot_path(&physical) && !ctx.policy.allow_snapshot_paths {
+        if table.is_snapshot_path(&physical) && !ctx.policy.allow_snapshot_paths {
             return deny(Reason::SnapshotPath);
         }
     }
 
     // ---- 6. Device pinning. ----
-    let physical_meta = match ctx.probe.symlink_metadata(&physical) {
-        Ok(meta) => meta,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return deny(Reason::NotFound),
-        Err(error) => return deny(Reason::ProbeUnknown(error.to_string())),
+    //
+    // When no ancestor was a symlink, the physical path *is* the literal path,
+    // so this is the same `lstat` step 3 already performed. Asking twice would
+    // double the most frequent syscall in the whole plan for no new answer: a
+    // swap between the two calls is exactly as possible with either one.
+    let physical_meta = if escaped {
+        match ctx.probe.symlink_metadata(&physical) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return deny(Reason::NotFound),
+            Err(error) => return deny(Reason::ProbeUnknown(error.to_string())),
+        }
+    } else {
+        meta
     };
     if physical_meta.is_symlink() && !ctx.policy.allow_leaf_symlink {
         // A race already, or a link inside a resolved directory.

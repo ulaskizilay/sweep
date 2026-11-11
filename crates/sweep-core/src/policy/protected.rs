@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use crate::paths::{is_within, normalize, Xdg};
+use crate::paths::{is_within_named, is_within_normalized, normalize, Xdg};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProtectedRoot {
@@ -108,11 +108,15 @@ pub const PROTECTED_ROOTS: &[ProtectedRoot] = &[
 ];
 
 /// Returns the protected root that contains `path`, if any.
+///
+/// This runs on every candidate, against every entry in the table, so the test
+/// is the byte comparison from [`is_within_normalized`]: the table is a
+/// constant of normalized absolute paths.
 pub fn match_root(path: &Path) -> Option<&'static ProtectedRoot> {
     let normalized = normalize(path);
     PROTECTED_ROOTS
         .iter()
-        .find(|root| is_within(Path::new(root.path), &normalized))
+        .find(|root| is_within_normalized(Path::new(root.path), &normalized))
 }
 
 /// Paths whose contents are the user, not a cache.
@@ -145,15 +149,18 @@ pub fn match_identity(path: &Path, xdg: &Xdg) -> Option<String> {
         return Some("home directory".to_string());
     }
 
+    // The suffix test does not build `home.join(suffix)`: this runs once per
+    // candidate, and eight joined paths per item was a measurable share of a
+    // million-file plan. `is_within_named` is the same test without the
+    // allocation.
     for suffix in IDENTITY_DIRS {
-        let candidate = xdg.home.join(suffix);
-        if is_within(&candidate, &normalized) {
+        if is_within_named(&xdg.home, &normalized, suffix) {
             return Some(format!("identity path ~/{suffix}"));
         }
     }
 
     // The tool's own runtime directory.
-    if is_within(&xdg.runtime.join("sweep"), &normalized) {
+    if is_within_named(&xdg.runtime, &normalized, "sweep") {
         return Some("sweep runtime directory".to_string());
     }
 

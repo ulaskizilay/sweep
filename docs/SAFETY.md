@@ -81,6 +81,36 @@ allowlist rather than instead of it. And it is read by the user process only,
 so it cannot reach the elevated child — which is not a gap, because the child
 acts on the plan it is sent and the parent never sends an ignored path.
 
+### The same answer is not asked for twice
+
+Three of those checks used to be slower than the work they describe, and a
+million-file cache made it visible: `sweep clean --dry-run` spent two minutes and
+fifteen seconds planning. The fixes changed no decision, only how many times one
+was computed.
+
+* **11–13 are one lookup.** "Which mount covers this path" and "is this path the
+  mount point" are the same question: the longest matching mount point *is* the
+  path when the path is a mount point. One pass over the table answers both,
+  and the prefix test is a byte comparison against a mount point that the parser
+  normalized, not a component walk.
+* **15 reuses 10's metadata when nothing was resolved.** If no ancestor was a
+  symlink, the physical path is the literal path, so the `lstat` at check 15 is
+  the one at check 10 repeated. A swap between two calls of the same path is
+  exactly as possible with either call, so asking once narrows no window; when
+  an ancestor *was* resolved, the physical path is a different path and it is
+  still `lstat`ed on its own.
+* **Protected roots, identity paths and allowed roots use the same byte test.**
+  `is_within_normalized` and `is_within_named` are `is_within` for paths that are
+  already normalized, and a property test holds them to it over a corpus that
+  contains the pairs a naive prefix gets wrong (`/home/u` and `/home/u2`,
+  `a` and `a.b`). Every XDG base is normalized where it is resolved, so the
+  precondition holds for the paths that reach them.
+
+Measured on the same machine, same catalog, same plan: `clean --dry-run`
+2m15s → 1m35s, and the per-item validation of a 966,645-entry package cache
+32s → 17s. The remaining per-item cost is syscalls - `canonicalize` of the
+parent, `lstat`, and the immutable-flag `ioctl` - not bookkeeping.
+
 ### Reason codes are an API
 
 `Reason::code()` strings appear in `--json` output and in the operation log. They

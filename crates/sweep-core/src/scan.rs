@@ -438,12 +438,15 @@ fn walk(
             block(out, base, &child, BlockKind::OtherDevice);
             continue;
         }
-        if probe.mount_table().facts(&child).is_none() {
+        // One lookup answers both questions: which mount covers this entry, and
+        // whether the entry is the mount point itself. Asking separately meant
+        // two scans of the table for every file in the tree.
+        let Some(placement) = probe.mount_table().placement(&child) else {
             out.stats.unknown_mount += 1;
             block(out, base, &child, BlockKind::UnknownMount);
             continue;
-        }
-        if probe.mount_table().is_mount_point(&child) {
+        };
+        if placement.is_mount_point {
             // A bind mount keeps the source device, so `st_dev` cannot see it.
             out.stats.mount_points += 1;
             block(out, base, &child, BlockKind::MountPoint);
