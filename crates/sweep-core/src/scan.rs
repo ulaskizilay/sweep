@@ -33,9 +33,16 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            // Large enough for a package manager cache, small enough that a
-            // mistaken root cannot turn a preview into a coffee break.
-            max_entries: 200_000,
+            // A real package manager cache is larger than it looks. `uv`'s
+            // archive cache alone held 943,871 entries on the machine this was
+            // measured on, and the earlier 200,000 stopped the walk before the
+            // first planned item: `sweep clean` then reported nothing for a
+            // directory holding 24 GiB, with only "scan incomplete" to say why.
+            // Two million covers that cache twice over.
+            //
+            // The count is not what bounds a mistaken root - the wall clock
+            // below is. A root of `/` still stops after 30 seconds.
+            max_entries: 2_000_000,
             time_budget: Duration::from_secs(30),
         }
     }
@@ -717,6 +724,19 @@ mod tests {
         assert_eq!(collected.stop, Stop::EntryBudget);
         assert!(collected.entries.len() < 50);
         assert!(!collected.stop.is_complete());
+    }
+
+    #[test]
+    fn the_default_entry_budget_covers_a_real_package_cache() {
+        // `uv`'s archive cache held 943,871 entries on the machine this was
+        // measured on. A default below that stops the walk before the first
+        // planned item, which is how 24 GiB became invisible: the rule reported
+        // `scan_incomplete` and planned nothing, run after run.
+        assert!(
+            Limits::default().max_entries > 943_871,
+            "the default entry budget must cover the largest real cache measured; \
+             lowering it hides whole directories behind `scan_incomplete`"
+        );
     }
 
     #[test]

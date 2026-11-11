@@ -237,6 +237,14 @@ keeps its parents.
   cannot recurse, so planning it would only produce `ENOTEMPTY`.
 - A scan that hits its entry or time budget plans **nothing at all** for that
   rule. A half-seen tree is exactly where "the newest file is old" is a lie.
+  The budgets are two million entries and thirty seconds, and a rule that stops
+  says which one it hit: `dev.uv.cache` needed the entry budget raised because a
+  real package-manager cache held 943,871 entries, and a lower default turned
+  24 GiB into "scan incomplete, nothing planned" on every run.
+- Depth is bounded by `max_depth`, which defaults to 8. A cache that unpacks
+  archives nests as deep as the deepest package inside it - the same `uv` cache
+  reached 14 - so a rule whose layout is deeper says so instead of leaving a
+  third of its tree unvisited.
 
 ## Patterns
 

@@ -1455,6 +1455,7 @@ fn merge_roots(rule: &Rule, runs: Vec<RuleRun>) -> RuleRun {
     let mut planned = 0;
     let mut report_only = 0;
     let mut incomplete = 0;
+    let mut incomplete_reason: Option<String> = None;
     let mut unreadable = 0;
     let mut empty = 0;
 
@@ -1468,7 +1469,16 @@ fn merge_roots(rule: &Rule, runs: Vec<RuleRun>) -> RuleRun {
         match run.status {
             Status::Planned => planned += 1,
             Status::ReportOnly => report_only += 1,
-            Status::ScanIncomplete => incomplete += 1,
+            Status::ScanIncomplete => {
+                incomplete += 1;
+                // The per-root run already knows which budget ran out. Merging
+                // the roots must not replace that with a count: "could not be
+                // scanned completely" leaves the user with no next action,
+                // while "entry budget exhausted" at least names the cause.
+                if incomplete_reason.is_none() {
+                    incomplete_reason = run.detail.clone();
+                }
+            }
             Status::Unreadable => unreadable += 1,
             Status::Empty => empty += 1,
             _ => {}
@@ -1492,8 +1502,11 @@ fn merge_roots(rule: &Rule, runs: Vec<RuleRun>) -> RuleRun {
         first_status
     };
     if incomplete > 0 {
+        let reason = incomplete_reason
+            .map(|reason| format!(" ({reason})"))
+            .unwrap_or_default();
         merged.detail = Some(format!(
-            "{incomplete} of {total} matched directories could not be scanned completely; \
+            "{incomplete} of {total} matched directories could not be scanned completely{reason}; \
              nothing from those directories is planned"
         ));
     }
@@ -2898,6 +2911,15 @@ privilege = "user"
         assert_eq!(run.status, Status::ScanIncomplete, "{run:?}");
         assert_eq!(run.items, 0);
         assert_eq!(report.totals.items, 0);
+        // The merged detail must keep the cause the per-root run found. A count
+        // of directories with no reason leaves the user nothing to act on.
+        assert!(
+            run.detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("entry budget exhausted")),
+            "the detail must name the budget that stopped the walk: {:?}",
+            run.detail
+        );
         assert!(report
             .notes
             .iter()

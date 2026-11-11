@@ -183,6 +183,13 @@ id = "dev.uv.cache"
 section = "dev-tools"
 kind = "dir-sweep"
 root = "{cache}/uv"
+# `archive-v0` unpacks each wheel into a directory tree, so the layout is as deep
+# as the deepest package in the cache: 13 levels of directory and 14 of file on
+# the machine this was measured on, against a default of 8. Everything below the
+# default was blocked as too deep, and a parent holding a blocked child is not
+# planned either, so a third of the cache could not be reached. Sixteen is
+# headroom over the measured depth, not a layout guess.
+max_depth = 16
 evidence = "uv's wheel and source cache; `uv sync` re-resolves and re-downloads."
 recoverable = true
 keep_days = 0

@@ -377,13 +377,31 @@ privilege = "user"
 fn the_catalog_digest_is_unchanged() {
     // FNV-1a over the safety-relevant shape of every rule, in id order. Tuning a
     // retention, moving a root, flipping a kind or adding a rule changes it.
+    //
+    // The walk shape belongs here too: `max_depth` decides how far down a rule
+    // looks, and `exclude` and `pattern` decide what it passes over. A rule whose
+    // depth is raised without a note is exactly the kind of change this test
+    // exists to put in front of a reviewer - `dev.uv.cache` needed 16 to reach
+    // the unpacked wheels it had been promising to remove.
     let set = catalog();
     let mut records: Vec<String> = set
         .rules()
         .iter()
         .map(|rule| {
+            let mut excludes: Vec<&str> = rule
+                .exclude
+                .iter()
+                .map(|pattern| pattern.source())
+                .collect();
+            excludes.sort_unstable();
+            let mut patterns: Vec<&str> = rule
+                .patterns
+                .iter()
+                .map(|pattern| pattern.source())
+                .collect();
+            patterns.sort_unstable();
             format!(
-                "{}|{}|{}|{}|{}|{}|{}|{}",
+                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
                 rule.id,
                 rule.section,
                 rule.kind,
@@ -398,6 +416,9 @@ fn the_catalog_digest_is_unchanged() {
                     .as_ref()
                     .map(|link| link.raw())
                     .unwrap_or_default(),
+                rule.max_depth,
+                excludes.join(","),
+                patterns.join(","),
                 rule.enabled
             )
         })
@@ -416,7 +437,7 @@ fn the_catalog_digest_is_unchanged() {
 
     // Update this value in the same commit as the rule change, so the review
     // diff shows the catalog moved on purpose.
-    const EXPECTED: u64 = 0xec39_8238_5d70_fb20;
+    const EXPECTED: u64 = 0x9b45_dbd0_b054_75bd;
     assert_eq!(
         format!("{hash:016x}"),
         format!("{EXPECTED:016x}"),

@@ -42,6 +42,10 @@ struct RuleReport {
     keep_versions: Option<u32>,
     /// `Some` only for `kind = "versions"`: the launcher whose target stays.
     keep_link: Option<String>,
+    /// How far below the root this rule looks. A cache that unpacks archives
+    /// nests as deep as the deepest package inside it, so the depth is part of
+    /// what the rule claims to cover.
+    max_depth: usize,
     recoverable: bool,
     privilege: &'static str,
     root: String,
@@ -230,6 +234,7 @@ fn build(set: &RuleSet, xdg: &Xdg) -> ListReport {
             keep_days: rule.keep_days,
             keep_versions: rule.keep_versions,
             keep_link: rule.keep_link.as_ref().map(|link| link.display(xdg)),
+            max_depth: rule.max_depth,
             recoverable: rule.recoverable,
             privilege: rule.privilege.as_str(),
             root: rule.root.raw().to_string(),
