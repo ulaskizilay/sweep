@@ -88,11 +88,17 @@ keep_days = 30
 requires = ["bin:go"]
 privilege = "user"
 
+# npm's cache is `$HOME/.npm` on every platform, not the XDG cache directory:
+# `npm config get cache` answers `~/.npm` even when `XDG_CACHE_HOME` is set. This
+# rule used to name `{cache}/npm/_cacache`, a path no Linux install creates, so
+# it reported "path not present" on every run while 1.9 GiB of cacache sat one
+# directory over. `_cacache` is the content-addressed store; `_logs`, `_npx` and
+# the build directories beside it are not named here.
 [[rule]]
 id = "dev.npm.cache"
 section = "dev-tools"
 kind = "dir-sweep"
-root = "{cache}/npm/_cacache"
+root = "{home}/.npm/_cacache"
 evidence = "Content-addressed package cache; npm rebuilds the index on the next install."
 recoverable = true
 keep_days = 0
@@ -105,6 +111,20 @@ section = "dev-tools"
 kind = "dir-sweep"
 root = "{cache}/yarn"
 evidence = "Yarn's package cache; a missing entry is fetched from the registry."
+recoverable = true
+keep_days = 0
+requires = ["bin:yarn"]
+privilege = "user"
+
+# Yarn Berry keeps its own cache under `~/.yarn`, not the classic `~/.cache/yarn`
+# location above. `berry/` also holds `global` (installed global packages) and
+# `plugins`, so the rule names `berry/cache` and not the directory it lives in.
+[[rule]]
+id = "dev.yarn.berry-cache"
+section = "dev-tools"
+kind = "dir-sweep"
+root = "{home}/.yarn/berry/cache"
+evidence = "Yarn Berry's downloaded package archives; `yarn install` fetches a missing entry again."
 recoverable = true
 keep_days = 0
 requires = ["bin:yarn"]
