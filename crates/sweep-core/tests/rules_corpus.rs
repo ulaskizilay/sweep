@@ -231,6 +231,33 @@ fn a_cache_root_that_holds_user_state_keeps_it() {
 }
 
 #[test]
+fn a_downloaded_artifact_is_reported_and_never_deleted() {
+    // These three roots hold something a tool fetched, not something it can
+    // rebuild: a browser revision from `npx puppeteer browsers install`, a
+    // Cypress binary, a guest image from QEMU's functional test suite. A
+    // `dir-sweep` with `keep_days = 0` would take them on every run, and their
+    // mtime says nothing about use because the tree is read and never
+    // rewritten. Deleting one costs a re-download, so the rule measures instead.
+    let set = catalog();
+    for id in [
+        "dev.puppeteer.cache",
+        "dev.cypress.cache",
+        "virt.qemu.cache",
+    ] {
+        let rule = set
+            .rules()
+            .iter()
+            .find(|rule| rule.id.as_str() == id)
+            .unwrap_or_else(|| panic!("{id} is missing from the catalog"));
+        assert_eq!(
+            rule.kind,
+            Kind::ReportOnly,
+            "{id} holds a download, not a rebuild"
+        );
+    }
+}
+
+#[test]
 fn a_versions_rule_names_the_launcher_that_must_survive() {
     // "Keep the newest" is a guess about which release is live. The launcher is
     // the statement, so every `versions` rule has to name one, and the named
@@ -437,7 +464,7 @@ fn the_catalog_digest_is_unchanged() {
 
     // Update this value in the same commit as the rule change, so the review
     // diff shows the catalog moved on purpose.
-    const EXPECTED: u64 = 0x64c5_027e_f433_66ad;
+    const EXPECTED: u64 = 0x0c77_f2ac_6171_5209;
     assert_eq!(
         format!("{hash:016x}"),
         format!("{EXPECTED:016x}"),

@@ -3,15 +3,16 @@
 # A container image is re-downloadable, but on a metered connection or a machine
 # that is offline it is expensive, and `docker system prune` deletes build cache
 # that a running multi-stage build depends on. Docker and Podman therefore appear
-# as reports. The only deletions here are a log directory with a settled format
-# and a scratch directory the tool itself treats as temporary.
+# as reports, and so does `~/.cache/qemu`, which holds guest images QEMU's test
+# suite downloaded. The only deletions here are a log directory with a settled
+# format and a scratch directory the tool itself treats as temporary.
 #
 # Never a rule: /var/lib/libvirt/images, ~/.vagrant.d/boxes, and any qcow2 or
 # vdi file. Those are machines, not caches.
 
 [meta]
 name = "virtualization"
-description = "VirtualBox logs, QEMU cache, Vagrant scratch, and read-only reports for Docker and Podman"
+description = "VirtualBox logs, Vagrant scratch, and read-only reports for QEMU, Docker and Podman"
 
 [[rule]]
 id = "virt.virtualbox.logs"
@@ -26,14 +27,22 @@ requires = ["bin:VirtualBox"]
 privilege = "user"
 max_depth = 1
 
+# `~/.cache/qemu` is not a runtime cache. No QEMU binary on this machine
+# mentions the path at all; only QEMU's own source tree writes it, through
+# `tests/functional` (guest images, hundreds of megabytes, fetched again) and
+# `tests/docker` (a ccache directory). Calling that "rebuilt on demand" was
+# wrong in the direction that costs the user a re-download, so the rule reports
+# the size instead of taking it, on the same ground as the browser builds in
+# `06-dev-tools.toml`.
+
 [[rule]]
 id = "virt.qemu.cache"
 section = "virtualization"
-kind = "dir-sweep"
+kind = "report-only"
 root = "{cache}/qemu"
-evidence = "QEMU's user-mode cache, rebuilt on demand."
+evidence = "Downloaded guest images and a build cache from QEMU's own test suite. Reported, never deleted: the images are fetched again, and a re-download is a cost rather than a rebuild."
 recoverable = true
-keep_days = 0
+keep_days = 30
 requires = ["bin:qemu-system-x86_64"]
 privilege = "user"
 
