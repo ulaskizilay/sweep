@@ -22,6 +22,14 @@
 #     there and why it was not taken, which is the honest answer to "why is this
 #     still on my disk".
 #
+# The clone report measures the whole clone tree except the archives, and that
+# exclusion is load-bearing twice. Without it the two rows count the same bytes:
+# a clone holding 6 GiB of archives said "16.8 GiB measured, never deleted" and
+# then deleted 7.3 GiB of it, so the sentence was false the moment it was read.
+# Without the depth it only described the top two levels, leaving `src/` - the
+# extracted copy of the tarball, several GiB on a package like `docker-desktop` -
+# invisible. What the row means now is exactly what stays behind.
+#
 # This section belongs to `installer`'s sibling command `aur`: the walk is small
 # but the confirmation has to explain git clones and recipes, and a bare
 # `sweep clean` has no room for that. `Section::command()` keeps it out of
@@ -48,10 +56,11 @@ id = "aur.paru.clones"
 section = "aur"
 kind = "report-only"
 root = "{cache}/paru/clone"
-evidence = "Reported, never deleted: a user-edited PKGBUILD exists only in this clone."
+evidence = "Reported, never deleted: a user-edited PKGBUILD exists only in this clone, and the downloaded source is the copy whose checksum still matches."
 keep_days = 30
 privilege = "user"
-max_depth = 2
+max_depth = 16
+exclude = ["*.pkg.tar.*"]
 
 [[rule]]
 id = "aur.yay.archives"
@@ -70,10 +79,11 @@ id = "aur.yay.clones"
 section = "aur"
 kind = "report-only"
 root = "{cache}/yay"
-evidence = "Reported, never deleted: a user-edited PKGBUILD exists only in this clone."
+evidence = "Reported, never deleted: a user-edited PKGBUILD exists only in this clone, and the downloaded source is the copy whose checksum still matches."
 keep_days = 30
 privilege = "user"
-max_depth = 2
+max_depth = 16
+exclude = ["*.pkg.tar.*"]
 
 [[rule]]
 id = "aur.trizen.archives"
@@ -92,7 +102,8 @@ id = "aur.trizen.clones"
 section = "aur"
 kind = "report-only"
 root = "{cache}/trizen"
-evidence = "Reported, never deleted: a user-edited PKGBUILD exists only in this clone."
+evidence = "Reported, never deleted: a user-edited PKGBUILD exists only in this clone, and the downloaded source is the copy whose checksum still matches."
 keep_days = 30
 privilege = "user"
-max_depth = 2
+max_depth = 16
+exclude = ["*.pkg.tar.*"]

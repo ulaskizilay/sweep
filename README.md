@@ -257,6 +257,11 @@ are kept for a subtler reason: if upstream republished a tarball, the cached
 copy is the one whose checksum still matches, so deleting it can leave a package
 that no longer builds until the recipe is fixed by hand.
 
+The clone row therefore counts what stays — the whole clone tree minus the
+archives the same run takes — so the planned size and the reported size never
+describe the same bytes twice, and the reported size is still true after an
+apply run.
+
 The clone directories are still reported, with their size and with the sentence
 saying they were not taken. "There is 12 GiB here you can't have automatically,
 and here is why" is a more useful answer than silence.

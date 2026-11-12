@@ -2316,6 +2316,56 @@ fn aur_takes_the_built_archive_and_leaves_the_recipe_beside_it() {
 }
 
 #[test]
+fn the_clone_report_measures_what_the_archive_rule_leaves_behind() {
+    // The two AUR rules share one root. The archive rule takes `*.pkg.tar.*`,
+    // so the clone report must not count those bytes again - otherwise the row
+    // says "16.8 GiB measured, never deleted" about a tree the same run empties
+    // by 7.3 GiB - and it must reach into `src/`, where makepkg's extracted
+    // sources live, or the number describes only the top two levels.
+    let home = home();
+    write(
+        home.path(),
+        ".cache/paru/clone/tool/PKGBUILD",
+        "pkgname=tool",
+    );
+    write(
+        home.path(),
+        ".cache/paru/clone/tool/tool-1.0-1-x86_64.pkg.tar.zst",
+        "archive",
+    );
+    write(
+        home.path(),
+        ".cache/paru/clone/tool/tool-1.0.tar.gz",
+        "source",
+    );
+    write(
+        home.path(),
+        ".cache/paru/clone/tool/src/deep/nested/file",
+        "extracted",
+    );
+
+    let output = run_in(home.path(), &["aur", "--dry-run", "--json"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    let report: serde_json::Value =
+        serde_json::from_str(&output.stdout).expect("one JSON document");
+    let row = report["rules"]
+        .as_array()
+        .expect("rules")
+        .iter()
+        .find(|row| row["id"] == "aur.paru.clones")
+        .expect("the clone rule is part of the section");
+    let detail = row["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail.starts_with("7 entries, "),
+        "the archive is the sibling rule's, and the nested source counts: {row}"
+    );
+    assert!(
+        detail.contains("never deleted"),
+        "the row has to say nothing is taken: {row}"
+    );
+}
+
+#[test]
 fn a_bare_clean_names_aur_instead_of_sweeping_helper_caches() {
     let home = home();
     write(
