@@ -1643,7 +1643,7 @@ fn execute(
     if run.items == 0 && run.refused == 0 {
         run.status = Status::Empty;
         if run.detail.is_none() {
-            run.detail = blocked_detail(&collected);
+            run.detail = blocked_detail(rule, &collected);
         }
     }
     run
@@ -2451,13 +2451,29 @@ fn age_candidates<'a>(
     candidates
 }
 
-fn blocked_detail(collected: &Collect) -> Option<String> {
+fn blocked_detail(rule: &Rule, collected: &Collect) -> Option<String> {
     if collected.blocked.is_empty() {
         return None;
     }
+    // A `file-pattern` rule plans individual files, so an entry the walker
+    // refused to follow only matters when the rule would have selected it: a
+    // symlink named `Thumbs.db` is a near miss, but the links the walk passed on
+    // the way there are not. Counting those made a `file-pattern` row read as if
+    // it had found hundreds of candidates and left them alone.
     let mut counts: BTreeMap<BlockKind, usize> = BTreeMap::new();
     for block in &collected.blocked {
+        if rule.kind == Kind::FilePattern
+            && !rule
+                .patterns
+                .iter()
+                .any(|pattern| pattern.matches_relative(&block.path))
+        {
+            continue;
+        }
         *counts.entry(block.kind).or_insert(0) += 1;
+    }
+    if counts.is_empty() {
+        return None;
     }
     let parts: Vec<String> = counts
         .into_iter()

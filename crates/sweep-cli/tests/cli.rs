@@ -1081,6 +1081,37 @@ fn a_downloaded_browser_build_is_reported_and_never_planned() {
 }
 
 #[test]
+fn a_file_pattern_row_counts_only_the_links_it_would_have_taken() {
+    // A `file-pattern` walk of the home directory passes thousands of symlinks
+    // on its way to `Thumbs.db`. Recording each one as "left alone" made the row
+    // read as if the rule had found hundreds of near misses, so the count is
+    // narrowed to the entries the pattern would have selected.
+    let home = home();
+    for name in ["desktop.ini", "unrelated-link"] {
+        std::os::unix::fs::symlink("/etc/passwd", home.path().join(name)).expect("symlink");
+    }
+
+    let output = run_in(
+        home.path(),
+        &["clean", "--dry-run", "--json", "--only", "user-essentials"],
+    );
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    let report: serde_json::Value =
+        serde_json::from_str(&output.stdout).expect("one JSON document");
+    let row = report["rules"]
+        .as_array()
+        .expect("rules")
+        .iter()
+        .find(|row| row["id"] == "user.windows-metadata")
+        .expect("the rule is part of the section");
+    assert_eq!(row["status"], "empty", "{row}");
+    assert_eq!(
+        row["detail"], "left alone: 1 symlink",
+        "only the link the pattern would have taken is a near miss: {row}"
+    );
+}
+
+#[test]
 fn the_blanket_sweep_does_not_take_a_glob_root_from_another_section() {
     // A glob root claims every directory it currently matches, not just the
     // literal text before the wildcard. Without that, `--only user-essentials`

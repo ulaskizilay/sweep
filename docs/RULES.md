@@ -173,6 +173,13 @@ scan of any one directory keeps that directory out of the plan.
 A retention the kind cannot read is a load error (`ignored_keep_days`), not a
 number printed by `rules list` that the run silently disobeys.
 
+`file-pattern` selects files, so it never has to empty a directory: an entry the
+walk refuses to follow is counted under "left alone" only when the pattern would
+have selected it. Without that narrowing a home-directory rule reported every
+symbolic link it passed on the way — a `Thumbs.db` search across 782 links that
+were not `Thumbs.db` — and the row read as if the rule had found hundreds of
+candidates.
+
 `if-missing-owner` and the `pkg:` requirement prefix are recognised as valid
 spellings but refused at load: the rule engine does not read the package
 database, so it cannot tell whether an owner is installed. Refusing them beats
