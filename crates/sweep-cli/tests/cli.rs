@@ -917,15 +917,18 @@ fn a_section_limited_run_does_not_widen_the_blanket_cache_sweep() {
     // `~/.cache/spotify` alone because `app.spotify.cache` claims it, while the
     // section-limited run planned the whole directory.
     //
-    // The other three entries are the `exclude` list, which has to hold on its
-    // own: `lutris` is the parent of its rule's root, so the claim covers only
-    // the `installer/` child and the tokens beside it would still be reachable.
+    // The other entries are either on the `exclude` list or a root a rule
+    // claims without deleting: `lutris` is the parent of its rule's root, so
+    // the claim covers only the `installer/` child and the tokens beside it
+    // would still be reachable, and `puppeteer` is a report-only rule, which
+    // claims its root even though it never plans a deletion.
     let home = home();
     for (relative, body) in [
         (".cache/spotify/component_crx_cache/blob", "cache"),
         (".cache/lutris/.gog.token", "token"),
         (".cache/lutris/installer/game.exe", "installer"),
         (".cache/mesa_shader_cache/blob", "shader"),
+        (".cache/puppeteer/chrome/linux-131/chrome", "browser"),
         (".cache/unknown-app/blob", "cache"),
     ] {
         write(home.path(), relative, body);
@@ -937,6 +940,9 @@ fn a_section_limited_run_does_not_widen_the_blanket_cache_sweep() {
         ".cache/spotify/component_crx_cache",
         ".cache/lutris",
         ".cache/lutris/installer",
+        ".cache/puppeteer",
+        ".cache/puppeteer/chrome",
+        ".cache/puppeteer/chrome/linux-131",
         ".cache/unknown-app",
     ] {
         age(&home.path().join(directory), 30);
@@ -965,6 +971,10 @@ fn a_section_limited_run_does_not_widen_the_blanket_cache_sweep() {
         .exists());
     assert!(home.path().join(".cache/lutris/.gog.token").exists());
     assert!(home.path().join(".cache/mesa_shader_cache/blob").exists());
+    assert!(home
+        .path()
+        .join(".cache/puppeteer/chrome/linux-131/chrome")
+        .exists());
 }
 
 #[test]
@@ -1016,6 +1026,57 @@ fn a_versioned_cache_directory_is_found_by_the_builtin_rule() {
     assert!(
         home.path().join(".cache/Google/Other/blob").exists(),
         "the pattern must not reach a sibling"
+    );
+}
+
+#[test]
+fn a_downloaded_browser_build_is_reported_and_never_planned() {
+    // A browser binary is fetched, not rebuilt, and its mtime says nothing about
+    // use: the tree is read and never rewritten, so `dir-sweep` with
+    // `keep_days = 0` removed it on every `clean`, including one run minutes
+    // after the user last launched it. The rule reports the size instead, and
+    // the blanket sweep must not take what the named rule leaves alone.
+    let home = home();
+    write(
+        home.path(),
+        ".cache/puppeteer/chrome/linux-131/chrome",
+        "browser",
+    );
+    age(
+        &home.path().join(".cache/puppeteer/chrome/linux-131/chrome"),
+        30,
+    );
+
+    let output = run_in(
+        home.path(),
+        &["clean", "--dry-run", "--json", "--only", "dev-tools"],
+    );
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    let report: serde_json::Value =
+        serde_json::from_str(&output.stdout).expect("one JSON document");
+    let row = report["rules"]
+        .as_array()
+        .expect("rules")
+        .iter()
+        .find(|row| row["id"] == "dev.puppeteer.cache")
+        .expect("the rule is part of the section");
+    assert_eq!(row["status"], "report_only", "{row}");
+    assert_eq!(row["items"], 0, "a reported entry is never planned: {row}");
+    assert!(
+        row["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("never deleted"),
+        "the row has to say the number is a measurement: {row}"
+    );
+
+    let output = run_in(home.path(), &["clean", "--yes", "--only", "dev-tools"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    assert!(
+        home.path()
+            .join(".cache/puppeteer/chrome/linux-131/chrome")
+            .exists(),
+        "a report-only rule deletes nothing"
     );
 }
 

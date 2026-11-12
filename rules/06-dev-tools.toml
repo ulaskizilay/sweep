@@ -475,25 +475,35 @@ privilege = "user"
 # blob/snapshot symlink layout. Two rules on one root, with two retention
 # policies, is how a sweep ends up disagreeing with itself.
 
+# Downloaded browser and test-runner binaries are reported, never deleted. They
+# are fetched, not rebuilt: removing one costs a multi-hundred-megabyte download
+# and breaks the next test run until it finishes, and a `dir-sweep` with
+# `keep_days = 0` removed them on every `clean` - including one run minutes
+# after the user last used them, because a browser binary is read, never
+# rewritten, so its mtime says nothing about use. The same category
+# (`ms-playwright`, `google-chrome-for-testing-headless`) is on
+# `user.cache.residual`'s exclude list because it has no rule of its own; these
+# two do not need an entry there, since the blanket sweep keeps away from every
+# root the catalog names, whatever the kind.
 [[rule]]
 id = "dev.puppeteer.cache"
 section = "dev-tools"
-kind = "dir-sweep"
+kind = "report-only"
 root = "{cache}/puppeteer"
-evidence = "Downloaded browser revisions; reinstalled by the next `npm install`."
+evidence = "Downloaded browser revisions. Reported, never deleted: `npx puppeteer browsers install` fetches them again, and a re-download is a cost rather than a rebuild."
 recoverable = true
-keep_days = 0
+keep_days = 30
 requires = ["dir:{cache}/puppeteer"]
 privilege = "user"
 
 [[rule]]
 id = "dev.cypress.cache"
 section = "dev-tools"
-kind = "dir-sweep"
+kind = "report-only"
 root = "{cache}/Cypress"
-evidence = "Downloaded test-runner binary cache; reinstalled on demand."
+evidence = "Downloaded test-runner binary. Reported, never deleted: reinstalling it is a download, and the directory cannot tell a build in use from an abandoned one."
 recoverable = true
-keep_days = 0
+keep_days = 30
 requires = ["dir:{cache}/Cypress"]
 privilege = "user"
 
