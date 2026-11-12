@@ -2654,7 +2654,14 @@ fn render(report: &PipelineReport, verbose: u8) -> String {
     }
 
     if !report.funnel.skip_codes.is_empty() {
-        out.push_str("\n  refused at the final sink\n");
+        // The preview runs the same funnel with the removal turned off, so its
+        // counts are predictions. "refused at the final sink" would claim an
+        // action the dry run did not take.
+        out.push_str(if report.mode == "dry-run" {
+            "\n  would be refused at the final sink\n"
+        } else {
+            "\n  refused at the final sink\n"
+        });
         for code in &report.funnel.skip_codes {
             out.push_str(&format!("    {:<26} {}\n", code.code, code.count));
         }
@@ -2762,6 +2769,33 @@ privilege = "user"
 "#,
             root.display()
         )
+    }
+
+    #[test]
+    fn a_dry_run_says_what_would_be_refused_not_what_was() {
+        // The preview runs the same funnel with the removal turned off, so its
+        // counts are predictions. Printing "refused at the final sink" claims an
+        // action the run did not take.
+        let temp = tree(&[("cache/x/a.bin", "a")]);
+        let body = single_rule("t.rule", "dir-sweep", &temp.path().join("cache/x"), 0);
+        let mut report = report_for(&temp, &body, &Limits::default());
+        report.funnel.skip_codes.push(SkipCode {
+            code: "already_gone".into(),
+            count: 3,
+        });
+
+        let preview = render(&report, 0);
+        assert!(
+            preview.contains("would be refused at the final sink"),
+            "a preview predicts, it does not refuse: {preview}"
+        );
+
+        report.mode = "apply";
+        let applied = render(&report, 0);
+        assert!(
+            applied.contains("\n  refused at the final sink\n"),
+            "an applied run refused these: {applied}"
+        );
     }
 
     #[test]
