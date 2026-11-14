@@ -9,7 +9,7 @@
 //! stable hash, so `--dry-run` and the real run produce the same identity and a
 //! test can assert they agree.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::meta::Meta;
@@ -160,7 +160,13 @@ pub struct DeniedItem {
 pub struct Plan {
     items: Vec<PlanItem>,
     denied: Vec<DeniedItem>,
-    seen: BTreeSet<PathBuf>,
+    /// Paths already in the plan, so two rules cannot schedule the same one.
+    ///
+    /// A hash set, not a tree: the only operations are insert, remove and
+    /// (through `split`) insert, and `Path`'s `Ord` compares component by
+    /// component. A million-entry cache spent five seconds of a preview in the
+    /// tree's comparisons; the hash set asks the same question in one pass.
+    seen: HashSet<PathBuf>,
     /// `.trashinfo` records and the payload each one depends on, keyed by the
     /// literal record path the planner pushes.
     pairs: BTreeMap<PathBuf, PathBuf>,

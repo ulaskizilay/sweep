@@ -175,6 +175,33 @@ impl Collect {
             .find(|block| block.path.starts_with(relative))
     }
 
+    /// Every path at or above a blocked entry, as one set.
+    ///
+    /// [`Collect::blocked_within`] answers the same question one directory at a
+    /// time, and that is one comparison per *(directory, block)* pair: a
+    /// million-entry cache with a thousand blocks spent sixteen seconds of a
+    /// preview there. The set is built once from the blocks, so asking costs one
+    /// lookup instead of a scan. A directory is unplannable exactly when it is
+    /// the block itself or an ancestor of one, which is what the parents of each
+    /// block path are.
+    ///
+    /// Climbing stops at the first path the set already holds: inserting a path
+    /// also inserted every ancestor of it, so the rest of that chain is there.
+    pub fn blocked_ancestors(&self) -> std::collections::HashSet<&Path> {
+        let mut set: std::collections::HashSet<&Path> =
+            std::collections::HashSet::with_capacity(self.blocked.len() * 4);
+        for block in &self.blocked {
+            let mut current = Some(block.path.as_path());
+            while let Some(path) = current {
+                if !set.insert(path) {
+                    break;
+                }
+                current = path.parent();
+            }
+        }
+        set
+    }
+
     /// Blocked entries grouped by their top-level component, for age decisions.
     pub fn blocked_under(&self, top: &Path) -> Vec<&Block> {
         self.blocked
@@ -840,6 +867,56 @@ mod tests {
         assert_eq!(block.kind, BlockKind::Excluded);
         assert!(collected.blocked_within(Path::new("app/keep")).is_some());
         assert!(collected.blocked_within(Path::new("app/other")).is_none());
+    }
+
+    #[test]
+    fn the_block_index_agrees_with_asking_one_directory_at_a_time() {
+        let (temp, probe) = fixture();
+        let root = temp.path().join("cache");
+        touch(&root, "app/old.txt", "old");
+        touch(&root, "app/keep/fresh.txt", "fresh");
+        touch(&root, "other/lib/x.bin", "x");
+        touch(&root, "free/deep/file.txt", "f");
+
+        let exclude = vec![
+            Pattern::new("app/keep").unwrap(),
+            Pattern::new("other/lib").unwrap(),
+        ];
+        let specs = limits();
+        let mut spec = Spec::new(8, &specs);
+        spec.exclude = &exclude;
+        let collected = collect(&root, &root, 1, &spec, &probe);
+
+        let index = collected.blocked_ancestors();
+        // The root's own relative path is empty, and it is blocked by anything
+        // below it; a directory the walk never reached is not blocked.
+        let mut checked = vec![
+            PathBuf::from(""),
+            PathBuf::from("app"),
+            PathBuf::from("app/keep"),
+            PathBuf::from("app/other"),
+            PathBuf::from("free"),
+            PathBuf::from("free/deep"),
+            PathBuf::from("other"),
+        ];
+        for entry in &collected.entries {
+            checked.push(
+                entry
+                    .path
+                    .strip_prefix(&root)
+                    .expect("inside")
+                    .to_path_buf(),
+            );
+        }
+
+        for relative in &checked {
+            assert_eq!(
+                index.contains(relative.as_path()),
+                collected.blocked_within(relative).is_some(),
+                "the index and the per-directory scan disagree about {:?}",
+                relative
+            );
+        }
     }
 
     #[test]

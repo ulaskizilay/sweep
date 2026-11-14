@@ -2373,6 +2373,10 @@ fn plan_candidates<I, P>(
 
 /// Everything the walk enumerated, minus a directory that cannot be emptied.
 fn sweep_candidates<'a>(collected: &'a Collect, root: &'a Path) -> Vec<&'a Path> {
+    // One index for the whole rule. Asking `blocked_within` per directory is a
+    // comparison per (directory, block) pair, which on a million-entry cache
+    // with a thousand blocks was the single largest cost of the preview.
+    let blocked = collected.blocked_ancestors();
     collected
         .entries
         .iter()
@@ -2384,7 +2388,7 @@ fn sweep_candidates<'a>(collected: &'a Collect, root: &'a Path) -> Vec<&'a Path>
             // A directory that still holds an excluded, unreadable, symlinked or
             // claimed entry cannot be removed in one `unlinkat`; planning it would
             // only add a `directory_not_empty` refusal to the report.
-            collected.blocked_within(relative).is_none()
+            !blocked.contains(relative)
         })
         .map(|entry| entry.path.as_path())
         .collect()

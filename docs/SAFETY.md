@@ -83,10 +83,11 @@ acts on the plan it is sent and the parent never sends an ignored path.
 
 ### The same answer is not asked for twice
 
-Three of those checks, and the plan's final sort, used to be slower than the work
-they describe, and a million-file cache made it visible: `sweep clean --dry-run`
-spent two minutes and fifteen seconds planning. The fixes changed no decision,
-only how many times one was computed.
+Several of those checks, the plan's final sort, and two questions the planner asked
+once per item used to cost more than the work they describe, and a million-file
+cache made it visible: `sweep clean --dry-run` spent two minutes and fifteen
+seconds planning. The fixes changed no decision, only how many times one was
+computed.
 
 * **11–13 are one lookup.** "Which mount covers this path" and "is this path the
   mount point" are the same question: the longest matching mount point *is* the
@@ -113,13 +114,34 @@ only how many times one was computed.
   equivalent for one sample: the ordering test also asserts that every recorded
   depth equals its path's, and `--only system` keeps the same plan hash and the
   same item count.
+* **"Is a blocked entry at or under this directory" is indexed, not asked per
+  pair.** The planner must not schedule a directory whose contents it only partly
+  knows, so `sweep_candidates` asked `blocked_within` for every directory. That
+  is one comparison per *(directory, block)* pair: `~/.cache/uv` holds 1,037,504
+  directories and its walk blocks 1,022 paths, so the question was answered a
+  billion times and cost sixteen seconds of a preview. `Collect::blocked_ancestors`
+  builds the answer once, from the parents of each blocked path, and the planner
+  does one lookup per directory. A test holds the index to `blocked_within` over
+  every entry of a walk with two exclusions plus paths the walk never reached.
+* **The dedup sets are hash sets.** `Plan::seen` (two rules must not schedule the
+  same path) and the funnel's `settled` (a `.trashinfo` record may only follow a
+  payload that was removed) were `BTreeSet<PathBuf>`, whose `Ord` compares paths
+  component by component. Both are one insert per planned item, so a million-item
+  plan spent eight seconds there; a hash set asks the same question in one pass.
+  Neither set is ever iterated, so no output depends on their order, and the plan
+  hash is unchanged: `--only system` still gives `dedc716a805a8061` with 449
+  items, `--only dev-tools` `2bdfc5b39b93320b` with 1,218,377.
 
 Measured on the same machine and catalog: `clean --dry-run` 2m15s → 1m35s after
 the deduplication, and 1m50s after the sort fix on a plan that had grown by about
 150,000 items in the meantime. The per-item validation of a 966,645-entry
-package cache went 32s → 17s, and the plan sort 35s → 2.8s. The remaining
-per-item cost is syscalls - `canonicalize` of the parent, `lstat`, and the
-immutable-flag `ioctl` - not bookkeeping.
+package cache went 32s → 17s, and the plan sort 35s → 2.8s.
+
+A later pass found the same waste outside validation, and measured it on the
+release binary: `--only dev-tools` took 1m12s before it and 45s after, and the
+full `clean --dry-run` 1m51s → 1m17s. The remaining per-item cost is syscalls -
+`canonicalize` of the parent, `lstat`, and the immutable-flag `ioctl` - not
+bookkeeping.
 
 ### Reason codes are an API
 

@@ -123,7 +123,9 @@ pub fn apply(
     // nothing is removed, so a payload the plan *would* remove counts as settled:
     // dry run and apply must reach the same verdict for the record, or the
     // preview would promise a deletion the real run refuses.
-    let mut settled: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
+    // A hash set for the same reason `Plan::seen` is one: this is one insert
+    // per planned item, and a tree compares paths component by component.
+    let mut settled: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
 
     for item in plan.items() {
         let outcome = match item.after() {
