@@ -517,14 +517,18 @@ same facts to a script.
 ### Optimize rebuilds, it does not sweep
 
 `sweep optimize` runs the small set of user-side maintenance commands whose
-output is an index: your journal older than two weeks, the fontconfig index, the
-application index, and the MIME index. Each task is a program that already ships
-with the system, run with a fixed argv under a 120-second deadline, on a
-directory sweep knows how to read. Sweep never writes into those directories
-itself; the tool that owns an index is the only thing that should rewrite it.
+output is an index: the fontconfig index, the application index, and the MIME
+index. Each task is a program that already ships with the system, run with a
+fixed argv under a 120-second deadline, on a directory sweep knows how to read.
+Sweep never writes into those directories itself; the tool that owns an index is
+the only thing that should rewrite it.
 
-The system-wide half of the same maintenance — `mandb`, `fstrim`, the system
-journal — needs root, and sweep prints those commands instead of running them.
+The system-wide half of the same maintenance — `mandb`, `fstrim`, the journal —
+needs root, and sweep prints those commands instead of running them. The journal
+belongs there even though it holds your own records: journald writes
+`user-<uid>.journal` as root into `/var/log/journal`, so `journalctl --user
+--vacuum-time=2weeks` prints `Permission denied` for every file, exits 0 and
+frees nothing. A task that says "ok" and changes nothing is worse than no task.
 The privileged path in sweep exists for one known set of cache roots; widening it
 to "run this as root" would turn a validated plan into a shell.
 

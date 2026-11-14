@@ -19,6 +19,16 @@
 //! * **Bounded.** Every command runs under `timeout`, so a hook that hangs on a
 //!   broken file cannot hold the terminal; a timeout is reported as a failure
 //!   with the command named.
+//!
+//! The journal is the one item that looks like a user task and is not. journald
+//! writes `user-<uid>.journal` as root into `/var/log/journal/<machine-id>`,
+//! owned by `root:systemd-journal` with no write bit for the user, so
+//! `journalctl --user --vacuum-time=2weeks` cannot unlink anything: it prints
+//! `Failed to delete archived journal …: Permission denied` for each file and
+//! still exits 0 with `freed 0B`. A task that reports `ok` and changes nothing
+//! is worse than no task, so the journal appears only in the privileged list.
+//! That is also why every task below targets something under `$HOME`; the test
+//! `every_task_targets_something_inside_home` keeps it that way.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -52,14 +62,6 @@ struct Task {
 
 const TASKS: &[Task] = &[
     Task {
-        id: "journal-vacuum",
-        title: "vacuum your user journal older than 2 weeks",
-        program: "journalctl",
-        args: &["--user", "--vacuum-time=2weeks"],
-        target: "/var/log/journal",
-        measure: false,
-    },
-    Task {
         id: "font-cache",
         title: "rebuild the fontconfig index",
         program: "fc-cache",
@@ -91,7 +93,7 @@ const PRIVILEGED: &[(&str, &str)] = &[
     ("sudo fstrim --all", "return unused blocks to the device"),
     (
         "sudo journalctl --vacuum-time=2weeks",
-        "trim the system journal",
+        "trim the journal (journald writes it as root)",
     ),
 ];
 
@@ -642,6 +644,25 @@ mod tests {
     }
 
     #[test]
+    fn every_task_targets_something_inside_home() {
+        // The user-side half runs as the user. A target outside `$HOME` is
+        // root-owned on a normal Arch install, so the tool could not write it
+        // and the task would report success while changing nothing - which is
+        // exactly what a user-journal vacuum did before it was removed.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let xdg = xdg_at(temp.path());
+        for task in TASKS {
+            let target = resolve(task.target, &xdg);
+            assert!(
+                target.starts_with(&xdg.home),
+                "{} targets {}, which is outside the home directory",
+                task.id,
+                target.display()
+            );
+        }
+    }
+
+    #[test]
     fn a_task_whose_directory_is_missing_is_skipped_with_a_reason() {
         let temp = tempfile::tempdir().expect("tempdir");
         let xdg = xdg_at(temp.path());
@@ -739,17 +760,20 @@ mod tests {
         assert!(!text.contains("ran:"), "a quiet line names no command");
 
         let skipped = Outcome {
-            id: "journal-vacuum",
-            title: "vacuum your user journal older than 2 weeks",
+            id: "desktop-database",
+            title: "rebuild the application index",
             state: State::Skipped,
-            message: Some("journalctl is not installed".to_string()),
+            message: Some("update-desktop-database is not installed".to_string()),
             seconds: 0.0,
             reclaimed: None,
             command: None,
         };
         let text = result_line(14, &skipped, 0);
         assert!(text.contains("skipped"), "{text}");
-        assert!(text.contains("journalctl is not installed"), "{text}");
+        assert!(
+            text.contains("update-desktop-database is not installed"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -761,8 +785,8 @@ mod tests {
             "~/.cache/fontconfig"
         );
         assert_eq!(
-            display_path(Path::new("/var/log/journal"), &xdg),
-            "/var/log/journal"
+            display_path(Path::new("/usr/share/man"), &xdg),
+            "/usr/share/man"
         );
     }
 

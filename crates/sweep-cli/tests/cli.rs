@@ -2961,7 +2961,6 @@ fn run_with_path(home: &Path, path: &Path, args: &[&str]) -> Output {
 fn optimize_dry_run_lists_the_tasks_and_runs_nothing() {
     let (home, bin) = optimize_home();
     for name in [
-        "journalctl",
         "fc-cache",
         "update-desktop-database",
         "update-mime-database",
@@ -2972,12 +2971,7 @@ fn optimize_dry_run_lists_the_tasks_and_runs_nothing() {
 
     let output = run_with_path(home.path(), &bin, &["optimize", "--dry-run"]);
     assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
-    for task in [
-        "journal-vacuum",
-        "font-cache",
-        "desktop-database",
-        "mime-database",
-    ] {
+    for task in ["font-cache", "desktop-database", "mime-database"] {
         assert!(
             output.stdout.contains(task),
             "`{task}` is missing from the plan:\n{}",
@@ -2997,11 +2991,52 @@ fn optimize_dry_run_lists_the_tasks_and_runs_nothing() {
     assert_eq!(snapshot(home.path()), before, "a dry run changes nothing");
 }
 
+/// The journal looks like a user task and is not one.
+///
+/// journald writes `user-<uid>.journal` as root into a directory the user
+/// cannot write, so `journalctl --user --vacuum-time` prints `Permission
+/// denied` for every file, exits 0 and frees nothing. Sweep therefore never
+/// runs it as the user; the root command is printed with the system-wide half.
+/// A future task table that re-adds it fails here rather than on a user's disk.
+#[test]
+fn the_journal_is_not_a_user_task() {
+    let (home, bin) = optimize_home();
+    for name in [
+        "journalctl",
+        "fc-cache",
+        "update-desktop-database",
+        "update-mime-database",
+    ] {
+        stub(&bin, name);
+    }
+
+    let plan = run_with_path(home.path(), &bin, &["optimize", "--dry-run"]);
+    assert_eq!(plan.code, Some(0), "stderr: {}", plan.stderr);
+    assert!(
+        !plan.stdout.contains("journal-vacuum"),
+        "the journal is not a user-side task:\n{}",
+        plan.stdout
+    );
+    assert!(
+        plan.stdout.contains("sudo journalctl --vacuum-time=2weeks"),
+        "the root command is still named:\n{}",
+        plan.stdout
+    );
+
+    let run = run_with_path(home.path(), &bin, &["optimize", "--yes"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let marker = std::fs::read_to_string(home.path().join("marker")).expect("marker");
+    assert!(
+        !marker.lines().any(|line| line == "journalctl"),
+        "sweep ran journalctl as the user, which can only free 0B:\n{marker}"
+    );
+    assert_eq!(log_rows(home.path()).len(), 3, "one row per user-side task");
+}
+
 #[test]
 fn optimize_runs_what_it_planned_and_records_it() {
     let (home, bin) = optimize_home();
     let names = [
-        "journalctl",
         "fc-cache",
         "update-desktop-database",
         "update-mime-database",
@@ -3031,15 +3066,13 @@ fn optimize_runs_what_it_planned_and_records_it() {
     let history = run_in(home.path(), &["history", "--json"]);
     let report: serde_json::Value = serde_json::from_str(&history.stdout).expect("json");
     assert_eq!(report["sessions"][0]["command"], "optimize");
-    assert_eq!(report["sessions"][0]["counts"]["rebuilt"], 4);
+    assert_eq!(report["sessions"][0]["counts"]["rebuilt"], 3);
 }
 
 #[test]
 fn optimize_without_yes_on_a_pipe_declines_and_runs_nothing() {
     let (home, bin) = optimize_home();
-    for name in ["fc-cache", "journalctl"] {
-        stub(&bin, name);
-    }
+    stub(&bin, "fc-cache");
     let before = snapshot(home.path());
 
     let output = run_with_path(home.path(), &bin, &["optimize"]);
@@ -3059,13 +3092,15 @@ fn optimize_without_yes_on_a_pipe_declines_and_runs_nothing() {
 #[test]
 fn optimize_skips_a_task_whose_program_is_missing() {
     let (home, bin) = optimize_home();
-    // Only one of the four programs exists.
+    // Only one of the three programs exists.
     stub(&bin, "fc-cache");
 
     let output = run_with_path(home.path(), &bin, &["optimize", "--yes"]);
     assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
     assert!(
-        output.stdout.contains("journalctl is not installed"),
+        output
+            .stdout
+            .contains("update-mime-database is not installed"),
         "a missing tool is named:\n{}",
         output.stdout
     );
