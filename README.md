@@ -410,6 +410,12 @@ applied run writes one row per decision to
 `~/.local/state/sweep/operations.jsonl` under a `clean-<unix>` session and exits
 1 if a syscall failed, with the reason recorded for each item.
 
+The scan phase walks every rule root, which on a full cache is a minute or more.
+A terminal therefore keeps one line on stderr naming the rule in progress and
+the seconds elapsed, overwritten in place and cleared before the report begins;
+a pipe gets nothing, and `--json` never carries it, so a document stays a
+document.
+
 Sizes are the sum of `st_blocks`, which is what the inodes account for. On a
 copy-on-write filesystem the space actually returned can be smaller when extents
 are shared with a snapshot or a reflink, and the report says so when a rule root

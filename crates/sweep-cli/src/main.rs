@@ -14,6 +14,7 @@ mod optimize;
 mod orphan_cache;
 mod packaging;
 mod pipeline;
+mod progress;
 mod rules;
 mod status;
 mod trash;

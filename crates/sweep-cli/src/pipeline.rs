@@ -36,6 +36,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::format::human_bytes;
+use crate::progress::Progress;
 use serde::Serialize;
 use sweep_core::fs_facts::MountTable;
 use sweep_core::model_cache::{self, Leftover};
@@ -445,6 +446,9 @@ pub fn run(
     };
 
     let mode = if dry_run { Mode::DryRun } else { Mode::Apply };
+    // The walk can take a minute on a full cache. On a terminal it keeps one
+    // line on stderr, which is cleared before any of the output below starts.
+    let progress = Progress::new(json);
     let Built {
         mut plan,
         mut report,
@@ -458,7 +462,9 @@ pub fn run(
         &Limits::default(),
         mode,
         &ignore,
+        Some(&progress),
     );
+    progress.finish();
 
     // Which rules the elevated child may act on. Derived from the loaded
     // catalog rather than from the plan, so an overlay rule can never be sent
@@ -1044,6 +1050,7 @@ fn build(
     limits: &Limits,
     mode: Mode,
     ignore: &sweep_core::ignore::Ignore,
+    progress: Option<&Progress>,
 ) -> Built {
     let command = scope.command;
     let sections = scope.sections(only);
@@ -1145,7 +1152,7 @@ fn build(
     let mut runs: Vec<RuleRun> = Vec::with_capacity(selected.len());
     let mut notes: Vec<String> = Vec::new();
 
-    for rule in &selected {
+    for (index, rule) in selected.iter().enumerate() {
         if let Some(status) = skip_reason(rule, xdg, &sections) {
             runs.push(base_run(
                 rule,
@@ -1153,6 +1160,9 @@ fn build(
                 skip_detail(command, rule, xdg, status),
             ));
             continue;
+        }
+        if let Some(progress) = progress {
+            progress.step(format!("{} ({}/{})", rule.id, index + 1, selected.len()));
         }
         let roots = match rule.expanded_roots(xdg) {
             Ok(roots) => roots,
@@ -2748,6 +2758,7 @@ mod tests {
             limits,
             Mode::DryRun,
             &sweep_core::ignore::Ignore::empty(&xdg.home),
+            None,
         );
         let preview = funnel::apply(&plan, &probe, Mode::DryRun, "clean", None);
         report.funnel = FunnelReport::of(&preview, Mode::DryRun);
@@ -3144,6 +3155,7 @@ privilege = "user"
             &limits,
             Mode::DryRun,
             &sweep_core::ignore::Ignore::empty(&xdg.home),
+            None,
         );
         let apply = build(
             Scope::CLEAN,
@@ -3155,6 +3167,7 @@ privilege = "user"
             &limits,
             Mode::Apply,
             &sweep_core::ignore::Ignore::empty(&xdg.home),
+            None,
         );
 
         // The preview and the run must describe the same plan: a different hash
@@ -3233,6 +3246,7 @@ privilege = "user"
             &Limits::default(),
             Mode::Apply,
             &sweep_core::ignore::Ignore::empty(&xdg.home),
+            None,
         );
         VersionsPlan {
             _temp: temp,
@@ -3395,6 +3409,7 @@ privilege = "user"
             &Limits::default(),
             Mode::Apply,
             &sweep_core::ignore::Ignore::empty(&xdg.home),
+            None,
         );
 
         assert!(
@@ -3457,6 +3472,7 @@ privilege = "user"
             &Limits::default(),
             Mode::Apply,
             &sweep_core::ignore::Ignore::empty(&xdg.home),
+            None,
         );
 
         assert!(
@@ -3613,6 +3629,7 @@ privilege = "user"
             &Limits::default(),
             Mode::Apply,
             &sweep_core::ignore::Ignore::empty(&xdg.home),
+            None,
         );
         assert!(!plan.is_empty(), "the fixture must plan one file");
 
