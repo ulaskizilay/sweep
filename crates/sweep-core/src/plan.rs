@@ -77,6 +77,14 @@ impl std::fmt::Display for RuleId {
 pub struct PlanItem {
     /// Path the funnel acts on: symlinked ancestors resolved.
     physical: PathBuf,
+    /// Components below the root, counted once when the item is built.
+    ///
+    /// The plan is sorted deepest-first, and recomputing this inside the
+    /// comparator re-parsed both paths for every comparison - tens of millions
+    /// of them on a full cache, and the largest single cost of a preview. The
+    /// number cannot go stale: `physical` is private, and both are assigned
+    /// together in one place.
+    depth: usize,
     /// Path the rule matched, kept for display and for the log.
     literal: PathBuf,
     rule: RuleId,
@@ -254,6 +262,7 @@ impl Plan {
         // lookup is by literal path because that is what the planner pushed.
         let after = self.pairs.get(literal).cloned();
         self.items.push(PlanItem {
+            depth: crate::paths::depth(&physical),
             physical,
             literal: literal.to_path_buf(),
             rule: rule.clone(),
@@ -303,8 +312,9 @@ impl Plan {
     pub fn finish(&mut self) {
         self.drop_ancestors_of_ignored();
         self.items.sort_by(|left, right| {
-            crate::paths::depth(&right.physical)
-                .cmp(&crate::paths::depth(&left.physical))
+            right
+                .depth
+                .cmp(&left.depth)
                 .then_with(|| left.physical.cmp(&right.physical))
         });
         self.hash = compute_hash(&self.items);
@@ -575,6 +585,17 @@ mod tests {
         assert!(position("/tmp/a/b/c.bin") < position("/tmp/a/b"));
         assert!(position("/tmp/a/b") < position("/tmp/a"));
         assert!(position("/tmp/a/d.bin") < position("/tmp/a"));
+        // The sort reads a recorded number now, not the path. Every item must
+        // carry the depth of the path it was built from, or the order would
+        // silently stop being post-order.
+        for item in plan.items() {
+            assert_eq!(
+                item.depth,
+                crate::paths::depth(item.path()),
+                "{} has a stale depth",
+                item.path().display()
+            );
+        }
     }
 
     #[test]
