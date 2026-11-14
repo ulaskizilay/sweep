@@ -83,10 +83,10 @@ acts on the plan it is sent and the parent never sends an ignored path.
 
 ### The same answer is not asked for twice
 
-Three of those checks used to be slower than the work they describe, and a
-million-file cache made it visible: `sweep clean --dry-run` spent two minutes and
-fifteen seconds planning. The fixes changed no decision, only how many times one
-was computed.
+Three of those checks, and the plan's final sort, used to be slower than the work
+they describe, and a million-file cache made it visible: `sweep clean --dry-run`
+spent two minutes and fifteen seconds planning. The fixes changed no decision,
+only how many times one was computed.
 
 * **11–13 are one lookup.** "Which mount covers this path" and "is this path the
   mount point" are the same question: the longest matching mount point *is* the
@@ -105,11 +105,21 @@ was computed.
   contains the pairs a naive prefix gets wrong (`/home/u` and `/home/u2`,
   `a` and `a.b`). Every XDG base is normalized where it is resolved, so the
   precondition holds for the paths that reach them.
+* **The plan sort reads a depth it counted once.** `Plan::finish` ordered items
+  deepest-first by computing `paths::depth` for both sides of every comparison,
+  which re-parsed two paths tens of millions of times on a full cache. The depth
+  is now recorded when the item is built, next to the private physical path, so
+  it cannot drift from the path it describes. The order is unchanged, not merely
+  equivalent for one sample: the ordering test also asserts that every recorded
+  depth equals its path's, and `--only system` keeps the same plan hash and the
+  same item count.
 
-Measured on the same machine, same catalog, same plan: `clean --dry-run`
-2m15s → 1m35s, and the per-item validation of a 966,645-entry package cache
-32s → 17s. The remaining per-item cost is syscalls - `canonicalize` of the
-parent, `lstat`, and the immutable-flag `ioctl` - not bookkeeping.
+Measured on the same machine and catalog: `clean --dry-run` 2m15s → 1m35s after
+the deduplication, and 1m50s after the sort fix on a plan that had grown by about
+150,000 items in the meantime. The per-item validation of a 966,645-entry
+package cache went 32s → 17s, and the plan sort 35s → 2.8s. The remaining
+per-item cost is syscalls - `canonicalize` of the parent, `lstat`, and the
+immutable-flag `ioctl` - not bookkeeping.
 
 ### Reason codes are an API
 
