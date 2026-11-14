@@ -74,8 +74,16 @@ The job refuses a tag whose name disagrees with the version the binary prints,
 and it runs the test suite before packaging: a tag can point at a commit whose CI
 run is still going, or whose CI was cancelled by a later push.
 
-**This workflow has never run.** It cannot be executed locally and the repository
-is private, so the first tag is also its first test. If it fails, the same steps
+**The job itself has never run.** The GitHub-specific half — checkout, the
+toolchain install, `gh release create` — cannot be executed locally, and the
+repository is private, so the first tag is also its first test of the runner.
+
+The packaging half was run by hand on 14 November 2026 at `98e55b3` and
+succeeded: `cargo test --workspace --all-targets` (598 tests) and
+`cargo build --release --locked` passed, the version check read `0.1.0` from the
+binary, and the assembled tree held `bin/sweep`, `LICENSE`, `README.md`, fifteen
+man pages and the three completions; the compressed archive was 1.6 MB. What is
+still unverified is the runner, not the archive. If the job fails, the same steps
 run by hand:
 
 ```bash

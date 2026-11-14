@@ -5,9 +5,11 @@
 # the workspace version fails here rather than publishing a binary that calls
 # itself something else.
 #
-# This workflow has never run. It cannot be executed locally and the repository
-# is private, so the first tag is also its first test; `packaging/README.md`
-# keeps a manual path for exactly that reason.
+# This job has never run: the GitHub-specific half (checkout, the toolchain
+# install, `gh release create`) cannot be executed locally, and the repository is
+# private, so the first tag is also its first test of the runner. The packaging
+# steps below were run by hand at 98e55b3 and produced the expected tree, so a
+# failure here points at the runner; `packaging/README.md` keeps the manual path.
 name: Release
 
 on:
