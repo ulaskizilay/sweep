@@ -1310,11 +1310,7 @@ fn build(
         // gain back. On btrfs those differ, and a maintenance tool that silently
         // equates them is how "freed 40 GB" gets into a bug report about a full
         // disk.
-        notes.push(
-            "sizes are the sum of st_blocks; on a copy-on-write filesystem, extents shared \
-             with a snapshot or a reflink may free less than that"
-                .to_string(),
-        );
+        notes.push(COPY_ON_WRITE_NOTE.to_string());
     }
 
     let refusals = summarise_refusals(&plan);
@@ -1362,6 +1358,15 @@ fn build(
         plan,
     }
 }
+
+/// Said once per report when the plan holds bytes on a copy-on-write filesystem.
+///
+/// A constant because a test has to tell it apart from a note that reports a
+/// withdrawal: on btrfs this note is always there, and a test asserting "no
+/// notes at all" would pass on ext4 and fail on the filesystem the job exists
+/// to cover.
+const COPY_ON_WRITE_NOTE: &str = "sizes are the sum of st_blocks; on a copy-on-write \
+    filesystem, extents shared with a snapshot or a reflink may free less than that";
 
 fn touches_copy_on_write(roots: &[PathBuf], mounts: &MountTable) -> bool {
     roots.iter().any(|root| {
@@ -3369,10 +3374,17 @@ privilege = "user"
 
         assert_eq!(fixture.plan.len(), 1, "the planned entry is still not live");
         assert_eq!(fixture.report.plan_hash, hash);
+        // A copy-on-write filesystem always carries its size caveat; what must
+        // stay quiet is the withdrawal report.
+        let unrelated: Vec<&String> = fixture
+            .report
+            .notes
+            .iter()
+            .filter(|note| note.as_str() != COPY_ON_WRITE_NOTE)
+            .collect();
         assert!(
-            fixture.report.notes.is_empty(),
-            "a re-check that withdraws nothing must stay quiet: {:?}",
-            fixture.report.notes
+            unrelated.is_empty(),
+            "a re-check that withdraws nothing must stay quiet: {unrelated:?}"
         );
     }
 

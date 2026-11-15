@@ -84,7 +84,10 @@ jobs:
       - name: Create a test user that owns the workspace
         run: |
           useradd --uid 1000 --create-home --shell /bin/bash tester
-          chown -R tester /__w
+          # Only the workspace, not all of `/__w`: that tree is the runner's own
+          # scratch space (`/home/runner/work`), and handing it to another user
+          # makes the runner unable to read its own step files.
+          chown -R tester "$GITHUB_WORKSPACE"
 
       - name: Tests
         env:
@@ -174,6 +177,10 @@ jobs:
   # Every `cargo fuzz` call names `+nightly` on the command line:
   # `rust-toolchain.toml` pins stable, and a pin beats `rustup default`, so a
   # bare `cargo fuzz` runs the stable compiler and dies on `-Zsanitizer`.
+  #
+  # `--target` names the host triple because cargo-fuzz defaults to musl on
+  # Linux, and ASAN refuses a statically linked libc. The host triple's `std`
+  # comes with the toolchain, so nothing else has to be installed.
   fuzz:
     name: fuzz (smoke)
     runs-on: ubuntu-latest
@@ -189,13 +196,13 @@ jobs:
           tool: cargo-fuzz
 
       - name: fuzz_validate
-        run: cargo +nightly fuzz run fuzz_validate -- -max_total_time=60
+        run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu fuzz_validate -- -max_total_time=60
 
       - name: fuzz_oplog_escape
-        run: cargo +nightly fuzz run fuzz_oplog_escape -- -max_total_time=60
+        run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu fuzz_oplog_escape -- -max_total_time=60
 
       - name: fuzz_rule_toml
-        run: cargo +nightly fuzz run fuzz_rule_toml -- -max_total_time=60
+        run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu fuzz_rule_toml -- -max_total_time=60
 
   # A broken relative link in README/SAFETY is the first sign of a stale claim.
   docs:
