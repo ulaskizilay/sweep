@@ -275,6 +275,25 @@ fallback was classifying a plain file in the middle of a path as a symlink
 escape. It now probes the entry with `fstatat(AT_SYMLINK_NOFOLLOW)` to tell them
 apart.
 
+### A move writes its record after both handles are open
+
+The trash is the one sink that moves instead of unlinking. `Trash::send` opens
+the source's parent and `Trash/files` with those same no-symlink handles, and
+only then writes the `.trashinfo` record and renames. Opening a directory can
+refuse but can never move anything, so doing it first means a refusal — a
+symlinked ancestor, a permission denial — leaves the trash untouched instead of
+a record offering to restore a payload that was never sent. A record whose
+rename then fails is removed, because a payload without a record would be
+invisible to every restore tool while a record without a payload is a broken
+entry in all of them. Pinned by
+`a_symlinked_ancestor_refuses_rather_than_redirecting` and
+`a_missing_entry_is_gone_not_an_empty_trash_entry`.
+
+`Trash::available` treats a name as taken when *any* directory entry carries it,
+not when `exists()` says so: a dangling link is invisible to `exists()`, but
+`renameat` onto it would replace the entry instead of placing the payload beside
+it. Pinned by `a_dangling_link_in_the_trash_still_occupies_its_name`.
+
 ---
 
 ## 8. Live data

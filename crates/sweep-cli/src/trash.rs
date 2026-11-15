@@ -125,11 +125,11 @@ impl Trash {
             .available(name)
             .ok_or_else(|| Refusal::Other("no free name in the trash".to_string()))?;
 
-        // The record comes first: if the move fails, a `.trashinfo` without a
-        // payload is deleted below, whereas a payload without a record would be
-        // invisible to every restore tool.
-        write_info(&info_path, path)?;
-
+        // Both handles first. Opening a directory can only refuse; it never
+        // moves anything, so a refusal here must not leave a restore record
+        // behind. The record still precedes the move: a payload without a record
+        // would be invisible to every restore tool, while a record whose move
+        // then failed is removed below.
         let from_dir = sys::open_dir_nofollow(parent).map_err(|error| match error {
             sys::OpenDirError::SymlinkRefused => Refusal::SymlinkAncestor,
             sys::OpenDirError::Io(io) => map_io(&io, parent),
@@ -138,6 +138,8 @@ impl Trash {
             sys::OpenDirError::SymlinkRefused => Refusal::SymlinkAncestor,
             sys::OpenDirError::Io(io) => map_io(&io, &self.files),
         })?;
+
+        write_info(&info_path, path)?;
 
         match sys::rename_beneath(&from_dir, name, &to_dir, &destination) {
             Ok(()) => Ok(Moved {
@@ -164,6 +166,10 @@ impl Trash {
     }
 
     /// The first name that is free in both `files/` and `info/`.
+    ///
+    /// "Free" means no directory entry, so the test does not follow a link: a
+    /// dangling link in `files/` still occupies the name, and `renameat` would
+    /// replace that entry rather than put the payload beside it.
     fn available(&self, name: &OsStr) -> Option<(OsString, PathBuf)> {
         for suffix in 0..1_000u32 {
             let candidate = if suffix == 0 {
@@ -176,7 +182,9 @@ impl Trash {
             let mut info_name = candidate.clone();
             info_name.push(".trashinfo");
             let info = self.info.join(&info_name);
-            if !self.files.join(&candidate).exists() && !info.exists() {
+            let taken = std::fs::symlink_metadata(self.files.join(&candidate)).is_ok()
+                || std::fs::symlink_metadata(&info).is_ok();
+            if !taken {
                 return Some((candidate, info));
             }
         }
@@ -354,6 +362,28 @@ mod tests {
     }
 
     #[test]
+    fn a_dangling_link_in_the_trash_still_occupies_its_name() {
+        let (_temp, xdg, trash) = fixture();
+        // A link that points nowhere is invisible to `exists()`, but the name is
+        // still taken: renaming onto it would replace the entry instead of
+        // placing the payload beside it.
+        std::os::unix::fs::symlink(xdg.home.join("gone"), trash.files().join("notes.txt"))
+            .expect("link");
+        let file = xdg.home.join("work/notes.txt");
+        std::fs::write(&file, b"body").expect("write");
+
+        let moved = trash.send(&file, &xdg).expect("moved");
+        assert_eq!(moved.to, trash.files().join("notes.txt.1"));
+        assert_eq!(std::fs::read_to_string(&moved.to).expect("payload"), "body");
+        assert!(
+            std::fs::symlink_metadata(trash.files().join("notes.txt"))
+                .expect("link")
+                .is_symlink(),
+            "the dangling link was left where it was"
+        );
+    }
+
+    #[test]
     fn a_symlink_moves_as_a_link_and_its_target_survives() {
         use std::os::unix::fs::MetadataExt;
         let (_temp, xdg, trash) = fixture();
@@ -414,6 +444,17 @@ mod tests {
             .expect_err("a link above the entry is a refusal");
         assert_eq!(error, Refusal::SymlinkAncestor);
         assert!(real.join("file").exists(), "nothing moved");
+        assert_eq!(
+            record_count(&xdg),
+            0,
+            "a refusal before the move leaves no restore record"
+        );
+    }
+
+    fn record_count(xdg: &Xdg) -> usize {
+        std::fs::read_dir(xdg.data.join("Trash/info"))
+            .expect("info")
+            .count()
     }
 
     #[test]
