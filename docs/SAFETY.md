@@ -573,6 +573,29 @@ those two calls, the handle refers to the new directory.
 independent coincidences, one of which the attacker cannot control (inode
 numbers are not chosen by the attacker).
 
+#### Why the parent is resolved per item, not per directory
+
+Resolving the literal parent once and reusing the answer would remove the largest
+remaining per-item syscall: `canonicalize` was 6.6s of a 45s
+`clean --dry-run --only dev-tools`, whose 1,038,007 entries sit in 196,190
+distinct parent directories.
+
+It is not done, because the reuse would widen this risk from "between two adjacent
+syscalls" to "between the first item under a directory and the plan". The
+`dev`/`ino` comparison above does not narrow that wider window: the plan records
+the `dev`/`ino` it read from the *resolved* path, so a stale resolution records the
+stale path's own metadata, and the sink then confirms it instead of refusing it.
+The coincidence this risk currently requires — a replacement directory holding an
+entry with the same inode — would no longer be required.
+
+A verified cache is possible: `lstat` the literal parent for every item and reuse
+the resolved path only while its `dev`/`ino` are unchanged. That closes the
+replaced-ancestor case and still removes most of the cost, but it leaves the case
+where the literal parent reaches the same directory through a different chain while
+the cached path reaches another one. That is a separate design with its own
+sink-race tests, for about 5s of a command that runs once a week, so it stays open
+rather than taken.
+
 ### R3. Snapshot detection is name-based
 
 A snapshot stored somewhere other than `.snapshots`, `@@snapshots`, `timeshift`
