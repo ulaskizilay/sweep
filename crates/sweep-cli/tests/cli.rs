@@ -1238,6 +1238,36 @@ fn clean_leaves_the_paths_the_ignore_file_protects() {
 }
 
 #[test]
+fn a_tilde_ignore_line_names_one_path_not_every_name_match() {
+    let home = home();
+    // A cache directory whose name is the one the ignore line uses. `~/work`
+    // names `$HOME/work`, so this one is swept like any other cache entry.
+    let same_name = home
+        .path()
+        .join(".cache/mozilla/firefox/profile/cache2/entries/work");
+    write(
+        home.path(),
+        ".cache/mozilla/firefox/profile/cache2/entries/work/blob",
+        "ordinary cache body",
+    );
+    write(home.path(), "work/notes.txt", "mine");
+    write(home.path(), ".config/sweep/ignore", "~/work\n");
+
+    let output = run_in(home.path(), &["clean", "--yes", "--only", "browsers"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+
+    assert!(
+        !same_name.exists(),
+        "`~/work` is a path, not a name match at any depth:\n{}",
+        output.stdout
+    );
+    assert!(
+        home.path().join("work/notes.txt").exists(),
+        "the directory the line names is untouched"
+    );
+}
+
+#[test]
 fn a_malformed_ignore_file_refuses_the_run_and_names_the_line() {
     let home = home();
     let blob = firefox_cache(home.path());

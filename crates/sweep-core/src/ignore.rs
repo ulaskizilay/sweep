@@ -25,8 +25,10 @@
 //! be a second set of corner cases to remember.
 //!
 //! A pattern with no `/` matches a single name at any depth, which is why
-//! `*.iso` is useful. A pattern with `/` is anchored to its base — `$HOME` for a
-//! bare line, `/` for one that starts with `/` or `~`.
+//! `*.iso` is useful. A pattern with `/` is anchored to its base: `$HOME` for a
+//! bare line or one that starts with `~/`, `/` for one that starts with `/`.
+//! The `~/` form is anchored even when only one component follows it, so
+//! `~/work` is that directory and not every `work` at any depth.
 //!
 //! ## Protection covers the subtree
 //!
@@ -55,9 +57,9 @@ use crate::Xdg;
 /// Where a pattern is anchored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Base {
-    /// A bare line: relative to `$HOME`.
+    /// A bare line or one starting with `~/`: relative to `$HOME`.
     Home,
-    /// A line starting with `/` or `~`: relative to `/`.
+    /// A line starting with `/`: relative to `/`.
     Root,
 }
 
@@ -231,23 +233,23 @@ impl Ignore {
                 )));
             }
 
-            let (base, pattern) = if text == "~" {
+            let (base, pattern, tilde) = if text == "~" {
                 return Err(fail(
                     "`~` is your home directory, which is not a target; name something inside it, \
                      like `~/work`"
                         .to_string(),
                 ));
             } else if let Some(rest) = text.strip_prefix("~/") {
-                (Base::Home, rest)
+                (Base::Home, rest, true)
             } else if text.starts_with('~') {
                 return Err(fail(format!(
                     "`{text}` names another user's home, which this file cannot expand; use an \
                      absolute path or `~/...`"
                 )));
             } else if let Some(rest) = text.strip_prefix('/') {
-                (Base::Root, rest)
+                (Base::Root, rest, false)
             } else {
-                (Base::Home, text)
+                (Base::Home, text, false)
             };
 
             if pattern.is_empty() {
@@ -275,7 +277,10 @@ impl Ignore {
                 source: text.to_string(),
                 pattern: pattern.to_string(),
                 base,
-                anchored: pattern.contains('/') || base == Base::Root,
+                // `~/x` is a path the user wrote out, so it is anchored even when
+                // what follows is a single component: `~/work` must not also
+                // protect every `work` at any depth.
+                anchored: pattern.contains('/') || base == Base::Root || tilde,
                 directory,
                 literal: !pattern.bytes().any(|byte| byte == b'*' || byte == b'?'),
                 tail: pattern
@@ -371,6 +376,13 @@ mod tests {
         assert_eq!(
             matched("~/work\n", "/home/alice/work/deep/file.rs"),
             Some("~/work".to_string())
+        );
+        // `~/work` is a path, not a name match: the same name somewhere else
+        // under `$HOME` is not what the line names.
+        assert_eq!(
+            matched("~/work\n", "/home/alice/.cache/build/work"),
+            None,
+            "a `~/` line is anchored to $HOME"
         );
     }
 

@@ -200,8 +200,8 @@ $ cat ~/.config/sweep/ignore
 One pattern per line, `#` starts a comment, and the glob language is the one the
 rules already use: `*`, `?`, `**`. A line protects the path **and everything
 below it**, so `~/work` is enough. A pattern without `/` matches a name at any
-depth (`*.iso`); one with `/` is anchored, to `$HOME` for a bare line and to `/`
-for one starting with `/` or `~`.
+depth (`*.iso`); one with `/` is anchored: to `$HOME` for a bare line or one
+starting with `~/`, and to `/` for one starting with `/`.
 
 `clean`, `purge`, `installer` and `aur` skip a protected path and say how many
 they skipped, so you can tell the line took effect. `analyze` and `uninstall`
