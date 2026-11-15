@@ -533,6 +533,25 @@ fn log_outcome(log: &mut Oplog, outcome: &Outcome, task: &Scheduled, session: &s
     });
 }
 
+/// Why a task cannot run here, or `Ok` when it can.
+///
+/// The two answers stay separate because they send the user to different fixes.
+/// The program is checked first: without it there is nothing to run, so
+/// "the directory is gone" would name a second problem while hiding the one
+/// that has to be solved first.
+fn readiness(program: &str, program_present: bool, target: &Path) -> Result<(), String> {
+    if !program_present {
+        return Err(format!("{program} is not installed"));
+    }
+    if !target.exists() {
+        return Err(format!(
+            "{} does not exist, so there is no index to rebuild",
+            target.display()
+        ));
+    }
+    Ok(())
+}
+
 /// Resolves the table against this machine and this home.
 fn plan(xdg: &Xdg) -> Vec<Scheduled> {
     TASKS
@@ -544,18 +563,7 @@ fn plan(xdg: &Xdg) -> Vec<Scheduled> {
                 .iter()
                 .map(|arg| OsString::from(arg.replace("{home}", &xdg.home.to_string_lossy())))
                 .collect();
-            let ready = if program_exists(task.program) {
-                if target.exists() {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "{} does not exist, so there is no index to rebuild",
-                        target.display()
-                    ))
-                }
-            } else {
-                Err(format!("{} is not installed", task.program))
-            };
+            let ready = readiness(task.program, program_exists(task.program), &target);
             Scheduled {
                 task,
                 program: task.program,
@@ -664,17 +672,29 @@ mod tests {
 
     #[test]
     fn a_task_whose_directory_is_missing_is_skipped_with_a_reason() {
+        // A pure check, not `plan()`: the readiness answer used to depend on
+        // whether the host had `fc-cache`, so the same test asserted "does not
+        // exist" on an Arch container with fontconfig and "is not installed" on
+        // one without it.
         let temp = tempfile::tempdir().expect("tempdir");
-        let xdg = xdg_at(temp.path());
-        let planned = plan(&xdg);
-        let font = planned
-            .iter()
-            .find(|task| task.task.id == "font-cache")
-            .expect("font-cache is in the table");
-        match &font.ready {
-            Err(reason) => assert!(reason.contains("does not exist"), "{reason}"),
-            Ok(()) => panic!("the fixture home has no font cache"),
-        }
+        let missing = temp.path().join(".cache/fontconfig");
+        let reason =
+            readiness("fc-cache", true, &missing).expect_err("the fixture directory is absent");
+        assert!(reason.contains("does not exist"), "{reason}");
+        assert!(
+            reason.contains(&missing.display().to_string()),
+            "the reason names the path it looked at: {reason}"
+        );
+    }
+
+    #[test]
+    fn a_missing_program_is_named_before_a_missing_directory() {
+        // Both are wrong in a fresh home without fontconfig, and the tool is the
+        // fix that has to come first: the directory is created by using it.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reason = readiness("fc-cache", false, &temp.path().join(".cache/fontconfig"))
+            .expect_err("the program is absent");
+        assert_eq!(reason, "fc-cache is not installed");
     }
 
     #[test]
