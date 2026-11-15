@@ -295,14 +295,30 @@ mod tests {
         let (temp, xdg) = fixture();
         let target = temp.path().join("elsewhere");
         std::fs::create_dir_all(&target).expect("mkdir");
-        std::fs::write(target.join("data"), "x".repeat(4096)).expect("write");
+        // The payload is incompressible and far larger than any filesystem's
+        // link accounting. btrfs charges a symlink one block (4096 bytes) while
+        // ext4 and tmpfs charge none, so an earlier "smaller than one block"
+        // bound tested the filesystem: it passed on ext4 and failed on the
+        // btrfs job, where the honest answer for the link is one block. The
+        // property that matters is "the target's megabytes are not attributed
+        // to the link", and that holds on every filesystem.
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let payload: Vec<u8> = (0..1 << 20)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as u8
+            })
+            .collect();
+        std::fs::write(target.join("data"), &payload).expect("write");
         std::os::unix::fs::symlink(&target, xdg.config.join("firefox")).expect("symlink");
 
         let found = scan(&xdg, &["firefox".to_string()]);
         assert_eq!(found.len(), 1);
         assert!(found[0].is_symlink, "{found:?}");
         assert!(
-            found[0].bytes.unwrap_or(u64::MAX) < 4096,
+            found[0].bytes.unwrap_or(u64::MAX) < 64 * 1024,
             "the link's own size, not the target's: {found:?}"
         );
     }

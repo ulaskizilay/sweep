@@ -71,7 +71,11 @@ jobs:
           RUSTUP_HOME: /opt/rustup
           CARGO_HOME: /opt/cargo
         run: |
-          rustup toolchain install stable --profile minimal
+          # The components are named here because `rust-toolchain.toml` names
+          # them: a pin beats `--profile minimal`, so rustup tries to add the
+          # missing ones the first time the test user runs `cargo`, and the
+          # toolchain is read-only for that user.
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
           rustup default stable
           # The registry and the toolchain are read-only for the test user; only
           # the workspace needs to be writable. `cargo` has not run yet, so
@@ -129,7 +133,10 @@ jobs:
 
       - name: Toolchain
         run: |
-          rustup toolchain install stable --profile minimal
+          # Same reason as the unprivileged job: the pin in
+          # `rust-toolchain.toml` asks for these two components, and installing
+          # them here keeps the first `cargo` call from doing it implicitly.
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
           rustup default stable
 
       - name: Tests, with temporary directories on btrfs
