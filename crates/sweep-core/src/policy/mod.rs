@@ -2,4 +2,7 @@
 
 pub mod protected;
 
-pub use protected::{match_identity, match_root, ProtectedRoot, IDENTITY_DIRS, PROTECTED_ROOTS};
+pub use protected::{
+    match_identity, match_identity_normalized, match_root, match_root_normalized, ProtectedRoot,
+    IDENTITY_DIRS, PROTECTED_ROOTS,
+};

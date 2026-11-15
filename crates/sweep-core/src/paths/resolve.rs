@@ -4,6 +4,7 @@
 //! candidate path. The system's real behaviour is checked later by
 //! [`crate::probe::FsProbe`]; this module only reasons about the string form.
 
+use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
@@ -23,6 +24,58 @@ pub fn has_control_bytes(value: &OsStr) -> bool {
 pub fn has_parent_component(path: &Path) -> bool {
     path.components()
         .any(|component| matches!(component, Component::ParentDir))
+}
+
+/// True only when [`normalize`] is a byte-for-byte no-op on this path.
+///
+/// A byte scan rather than a `components()` walk, because `components()` already
+/// collapses `//` and drops a trailing separator, so it cannot see the two
+/// shapes this has to catch.
+///
+/// It is **conservative**: a path holding `..` is reported `false` even though
+/// `normalize` keeps it, because no cleanup target may hold one and
+/// [`crate::validate`] refuses those before this question is asked. A `true`
+/// therefore never means "close enough"; it means the bytes the policy tables
+/// compare are the bytes the caller already has.
+pub fn is_normalized(path: &Path) -> bool {
+    let bytes = path.as_os_str().as_bytes();
+    if bytes.first() != Some(&b'/') {
+        return false;
+    }
+    if bytes.len() > 1 && bytes[bytes.len() - 1] == b'/' {
+        return false;
+    }
+    let mut start = 0;
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte != b'/' {
+            continue;
+        }
+        let segment = &bytes[start..index];
+        // An empty segment is the leading separator at index 0, or a `//`.
+        if segment.is_empty() && index != 0 {
+            return false;
+        }
+        if segment == b"." || segment == b".." {
+            return false;
+        }
+        start = index + 1;
+    }
+    let last = &bytes[start..];
+    last != b"." && last != b".."
+}
+
+/// [`normalize`], borrowing when the path is already normal.
+///
+/// Every candidate path a scan produces is built by joining components onto an
+/// absolute root, so it is already normal; allocating a `PathBuf` for it was
+/// three allocations per candidate in the plan - one here and one in each of the
+/// two policy tables - for a string that does not change.
+pub fn normalize_cow(path: &Path) -> Cow<'_, Path> {
+    if is_normalized(path) {
+        Cow::Borrowed(path)
+    } else {
+        Cow::Owned(normalize(path))
+    }
 }
 
 /// Lexically normalises a path: drops `.` components and collapses `//`.
@@ -216,6 +269,46 @@ mod tests {
     }
 
     #[test]
+    fn is_normalized_accepts_the_scan_shapes_and_refuses_the_noisy_ones() {
+        for path in [
+            "/",
+            "/a",
+            "/a/b",
+            "/a/b/c",
+            "/a/..b/c",
+            "/a/.hidden",
+            "/a/b..c",
+            "/é/ü",
+        ] {
+            assert!(is_normalized(Path::new(path)), "{path}");
+            assert_eq!(normalize(Path::new(path)), PathBuf::from(path));
+        }
+        // `components()` collapses `//` and drops a trailing separator, so it
+        // cannot see either of these: the byte scan has to. A `..` tail is
+        // refused as well, which is the one place this is stricter than
+        // `normalize` on purpose.
+        for path in [
+            "", "a", "/a/", "/a//b", "//", "/./a", "/a/.", "/../a", "/a/..",
+        ] {
+            assert!(!is_normalized(Path::new(path)), "{path}");
+        }
+    }
+
+    #[test]
+    fn normalize_cow_borrows_the_common_case_and_owns_the_rest() {
+        let already = Path::new("/home/u/.cache/x");
+        assert!(matches!(normalize_cow(already), Cow::Borrowed(_)));
+
+        let noisy = Path::new("/home/u//.cache/./x");
+        match normalize_cow(noisy) {
+            Cow::Owned(path) => assert_eq!(path, PathBuf::from("/home/u/.cache/x")),
+            Cow::Borrowed(path) => panic!("{path:?} is not normalized"),
+        }
+        // The borrow must still answer the same as the owned form.
+        assert_eq!(normalize_cow(noisy).as_ref(), normalize(noisy));
+    }
+
+    #[test]
     fn control_bytes_are_detected_for_any_byte_below_space() {
         for byte in 0u8..0x20 {
             let value = OsString::from_vec(vec![b'a', byte, b'b']);
@@ -277,6 +370,56 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `is_normalized` never says `true` about a path `normalize` would rewrite.
+    ///
+    /// This is the fast path the validator takes, and a wrong `true` would hand
+    /// a non-normalized path to the byte-prefix policy tests, which is how a
+    /// protected path stops looking protected. Every noisy shape is generated
+    /// from the corpus rather than listed by hand.
+    #[test]
+    fn is_normalized_never_claims_a_path_normalize_would_rewrite() {
+        let corpus = normalized_corpus();
+        let mut checked = 0;
+        for path in &corpus {
+            let text = path.to_string_lossy().into_owned();
+            let mut variants = vec![text.clone()];
+            if text.len() > 1 {
+                variants.push(format!("{text}/"));
+                variants.push(format!("{text}/."));
+                variants.push(format!("{text}/.."));
+                variants.push(format!("{text}//"));
+            }
+            variants.push(format!("{text}//x"));
+            variants.push(format!("{text}/./x"));
+            variants.push(format!("{text}/../x"));
+            variants.push(format!(".{text}"));
+            variants.push(format!("/.{text}"));
+            for variant in variants {
+                let variant = Path::new(&variant);
+                // Byte equality, not `Path` equality: `Path` compares
+                // component by component, so `///x == /x` and only the bytes
+                // tell a shape the byte-prefix tests can handle from one they
+                // cannot.
+                let unchanged = normalize(variant).as_os_str() == variant.as_os_str();
+                if is_normalized(variant) {
+                    assert!(unchanged, "{variant:?} claimed normal");
+                }
+                assert_eq!(
+                    normalize_cow(variant).as_ref(),
+                    normalize(variant),
+                    "{variant:?}"
+                );
+                checked += 1;
+            }
+        }
+        // Every path the corpus calls normalized must take the borrowed branch:
+        // that is the whole point of the fast path.
+        for path in &corpus {
+            assert!(is_normalized(path), "{path:?} was already normal");
+        }
+        assert!(checked > 1_000, "only {checked} shapes checked");
     }
 
     #[test]

@@ -113,10 +113,18 @@ pub const PROTECTED_ROOTS: &[ProtectedRoot] = &[
 /// is the byte comparison from [`is_within_normalized`]: the table is a
 /// constant of normalized absolute paths.
 pub fn match_root(path: &Path) -> Option<&'static ProtectedRoot> {
-    let normalized = normalize(path);
+    match_root_normalized(&normalize(path))
+}
+
+/// [`match_root`] for a path that is already [`normalize`]d.
+///
+/// The validator normalizes the candidate once and asks both tables about that
+/// same value, so normalizing again here was one allocation per candidate that
+/// could not change the answer.
+pub fn match_root_normalized(normalized: &Path) -> Option<&'static ProtectedRoot> {
     PROTECTED_ROOTS
         .iter()
-        .find(|root| is_within_normalized(Path::new(root.path), &normalized))
+        .find(|root| is_within_normalized(Path::new(root.path), normalized))
 }
 
 /// Paths whose contents are the user, not a cache.
@@ -136,16 +144,19 @@ pub const IDENTITY_DIRS: &[&str] = &[
 
 /// Returns a reason string when `path` is the user's own data or tool state.
 pub fn match_identity(path: &Path, xdg: &Xdg) -> Option<String> {
-    let normalized = normalize(path);
+    match_identity_normalized(&normalize(path), xdg)
+}
 
+/// [`match_identity`] for a path that is already [`normalize`]d.
+pub fn match_identity_normalized(normalized: &Path, xdg: &Xdg) -> Option<String> {
     // The base directories themselves are targets for their *children*, never
     // for deletion: removing `~/.cache` would take the whole tree with it.
     for (_, base) in xdg.bases() {
-        if normalized == *base {
+        if normalized == base {
             return Some(format!("base directory {}", base.display()));
         }
     }
-    if normalized == xdg.home {
+    if normalized == xdg.home.as_path() {
         return Some("home directory".to_string());
     }
 
@@ -154,13 +165,13 @@ pub fn match_identity(path: &Path, xdg: &Xdg) -> Option<String> {
     // million-file plan. `is_within_named` is the same test without the
     // allocation.
     for suffix in IDENTITY_DIRS {
-        if is_within_named(&xdg.home, &normalized, suffix) {
+        if is_within_named(&xdg.home, normalized, suffix) {
             return Some(format!("identity path ~/{suffix}"));
         }
     }
 
     // The tool's own runtime directory.
-    if is_within_named(&xdg.runtime, &normalized, "sweep") {
+    if is_within_named(&xdg.runtime, normalized, "sweep") {
         return Some("sweep runtime directory".to_string());
     }
 
@@ -236,6 +247,43 @@ mod tests {
         let xdg = xdg();
         assert!(match_identity(Path::new("/home/u/.sshfoo/key"), &xdg).is_none());
         assert!(match_identity(Path::new("/home/u2/.ssh/key"), &xdg).is_none());
+    }
+
+    /// The normalized entry points are the same decision as the public ones.
+    ///
+    /// They exist only so the validator can normalize once per candidate
+    /// instead of three times, so a drift between the pair would be a silent
+    /// change of what is protected.
+    #[test]
+    fn the_normalized_entry_points_agree_with_the_public_ones() {
+        let xdg = xdg();
+        for path in [
+            "/usr/bin/sweep",
+            "/usrlocal/bin",
+            "/etc/pacman.conf",
+            "/etcetera",
+            "/var/lib/pacman/local",
+            "/varlib/x",
+            "/home/u/.ssh/id_ed25519",
+            "/home/u/.sshfoo/key",
+            "/home/u/.cache/x",
+            "/home/u",
+            "/var/cache/pacman",
+            "/home/u/.local/state/sweep/operations.jsonl",
+        ] {
+            let path = Path::new(path);
+            let normalized = normalize(path);
+            assert_eq!(
+                match_root(path).map(|root| root.path),
+                match_root_normalized(&normalized).map(|root| root.path),
+                "{path:?}"
+            );
+            assert_eq!(
+                match_identity(path, &xdg),
+                match_identity_normalized(&normalized, &xdg),
+                "{path:?}"
+            );
+        }
     }
 
     #[test]

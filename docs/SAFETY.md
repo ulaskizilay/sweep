@@ -106,6 +106,20 @@ computed.
   contains the pairs a naive prefix gets wrong (`/home/u` and `/home/u2`,
   `a` and `a.b`). Every XDG base is normalized where it is resolved, so the
   precondition holds for the paths that reach them.
+* **The candidate is normalized once.** Those byte tests require a normalized
+  path, and the validator, `match_root` and `match_identity` each called
+  `normalize` on the same candidate: three `PathBuf` allocations per item for a
+  string that does not change, on every path a scan produces (a scan builds
+  every path by joining components onto an absolute root). `normalize_cow`
+  borrows when `is_normalized` says the bytes are already in that shape, and
+  `match_root_normalized` / `match_identity_normalized` take that value instead
+  of normalizing again. The public pair still normalizes, so no other caller
+  changed. `is_normalized` is conservative: it answers `true` only when
+  `normalize` would be a byte-for-byte no-op, and it refuses a `..` tail that
+  `normalize` would keep, which is why the validator's traversal check still
+  runs first. A test generates every noisy shape from the corpus and asserts the
+  implication in one direction only — `true` implies unchanged — plus that every
+  already-normal corpus path takes the borrowed branch.
 * **The plan sort reads a depth it counted once.** `Plan::finish` ordered items
   deepest-first by computing `paths::depth` for both sides of every comparison,
   which re-parsed two paths tens of millions of times on a full cache. The depth

@@ -17,7 +17,9 @@ use std::path::{Path, PathBuf};
 
 use crate::fs_facts::MountTable;
 use crate::meta::Meta;
-use crate::paths::{has_control_bytes, has_parent_component, is_within_normalized, normalize, Xdg};
+use crate::paths::{
+    has_control_bytes, has_parent_component, is_within_normalized, normalize, normalize_cow, Xdg,
+};
 use crate::policy;
 use crate::probe::FsProbe;
 
@@ -313,7 +315,9 @@ pub fn validate(path: &Path, ctx: &ValidateCtx<'_>) -> Verdict {
         return deny(Reason::Traversal);
     }
 
-    let literal = normalize(path);
+    // Borrowed for every path a scan produced, which is all but a handful.
+    let literal = normalize_cow(path);
+    let literal: &Path = &literal;
     if literal == Path::new("/") {
         return deny(Reason::RootItself);
     }
@@ -322,17 +326,17 @@ pub fn validate(path: &Path, ctx: &ValidateCtx<'_>) -> Verdict {
     };
 
     // ---- 2. Static policy. ----
-    if let Some(root) = policy::match_root(&literal) {
+    if let Some(root) = policy::match_root_normalized(literal) {
         return deny(Reason::ProtectedRoot(root.why));
     }
-    if let Some(what) = policy::match_identity(&literal, ctx.xdg) {
+    if let Some(what) = policy::match_identity_normalized(literal, ctx.xdg) {
         return deny(Reason::ProtectedIdentity(what));
     }
 
     let Some(allowed) = ctx
         .allowed
         .iter()
-        .find(|root| is_within_normalized(&root.path, &literal))
+        .find(|root| is_within_normalized(&root.path, literal))
     else {
         return deny(Reason::NotInAllowedRoot);
     };
@@ -341,7 +345,7 @@ pub fn validate(path: &Path, ctx: &ValidateCtx<'_>) -> Verdict {
     }
 
     // ---- 3. Literal metadata. ----
-    let meta = match ctx.probe.symlink_metadata(&literal) {
+    let meta = match ctx.probe.symlink_metadata(literal) {
         Ok(meta) => meta,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return deny(Reason::NotFound),
         Err(error) => return deny(Reason::ProbeUnknown(error.to_string())),
@@ -357,13 +361,13 @@ pub fn validate(path: &Path, ctx: &ValidateCtx<'_>) -> Verdict {
     // with a million files makes that the difference between a preview and a
     // coffee break.
     let table = ctx.probe.mount_table();
-    let Some(placement) = table.placement_normalized(&literal) else {
+    let Some(placement) = table.placement_normalized(literal) else {
         return deny(Reason::UnknownMount);
     };
     if placement.mount.options.read_only {
         return deny(Reason::ReadOnlyMount);
     }
-    if table.is_snapshot_path_normalized(&literal) && !ctx.policy.allow_snapshot_paths {
+    if table.is_snapshot_path_normalized(literal) && !ctx.policy.allow_snapshot_paths {
         return deny(Reason::SnapshotPath);
     }
     if placement.is_mount_point {
@@ -383,10 +387,10 @@ pub fn validate(path: &Path, ctx: &ValidateCtx<'_>) -> Verdict {
     if escaped {
         // Deny-only re-check: resolving never grants permission the literal path
         // did not already have.
-        if policy::match_root(&physical).is_some() {
+        if policy::match_root_normalized(&physical).is_some() {
             return deny(Reason::SymlinkAncestorEscape(physical.clone()));
         }
-        if policy::match_identity(&physical, ctx.xdg).is_some() {
+        if policy::match_identity_normalized(&physical, ctx.xdg).is_some() {
             return deny(Reason::SymlinkAncestorEscape(physical.clone()));
         }
         let Some(physical_placement) = table.placement(&physical) else {
