@@ -19,7 +19,7 @@ $ makepkg -si
 $ pacman -Q sweep-cli-git
 sweep-cli-git r<commits>.<short-sha>-1
 $ sweep --version
-sweep 0.1.0
+sweep 0.1.1
 ```
 
 The two differ on purpose: `sweep --version` reports the crate version the source
@@ -74,17 +74,18 @@ The job refuses a tag whose name disagrees with the version the binary prints,
 and it runs the test suite before packaging: a tag can point at a commit whose CI
 run is still going, or whose CI was cancelled by a later push.
 
-**The job itself has never run.** The GitHub-specific half — checkout, the
-toolchain install, `gh release create` — cannot be executed locally, and the
-repository is private, so the first tag is also its first test of the runner.
+**The job has run once and published nothing.** The `V0.1.0` tag reached the
+test gate and stopped: a property test symlinked into `/usr/lib/firmware` and
+answered `not_found` on a runner without `linux-firmware`, so the gate refused a
+commit that was not green. That was a defect in the test, not in the runner —
+it proved the host rather than the guard — and it is fixed at `V0.1.1`.
 
 The packaging half was run by hand on 14 November 2026 at `98e55b3` and
 succeeded: `cargo test --workspace --all-targets` (598 tests) and
 `cargo build --release --locked` passed, the version check read `0.1.0` from the
 binary, and the assembled tree held `bin/sweep`, `LICENSE`, `README.md`, fifteen
-man pages and the three completions; the compressed archive was 1.6 MB. What is
-still unverified is the runner, not the archive. If the job fails, the same steps
-run by hand:
+man pages and the three completions; the compressed archive was 1.6 MB. If the
+job fails, the same steps run by hand:
 
 ```bash
 cargo build --release --locked

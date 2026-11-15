@@ -74,9 +74,10 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
           # The registry and the toolchain are read-only for the test user; only
-          # the workspace needs to be writable.
-          chmod -R a+rX /opt/rustup /opt/cargo
+          # the workspace needs to be writable. `cargo` has not run yet, so
+          # `CARGO_HOME` does not exist until it is created here.
           mkdir -p /opt/cargo/registry
+          chmod -R a+rX /opt/rustup /opt/cargo
           chown -R 1000:1000 /opt/cargo/registry
           ln -sf /opt/cargo/bin/* /usr/local/bin/
 
@@ -113,9 +114,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends btrfs-progs
           truncate -s 1G /tmp/btrfs.img
           sudo mkfs.btrfs -q /tmp/btrfs.img
-          sudo mkdir -p /mnt/btrfs/tmp
+          sudo mkdir -p /mnt/btrfs
           sudo mount -o loop /tmp/btrfs.img /mnt/btrfs
           sudo chown -R "$USER" /mnt/btrfs
+          # After the mount, not before: a directory made on the underlying
+          # filesystem is hidden by the mount, and `TMPDIR` then names a path
+          # that does not exist.
+          mkdir -p /mnt/btrfs/tmp
           btrfs subvolume create /mnt/btrfs/@snapshots
           mkdir -p /mnt/btrfs/@snapshots/1/snapshot/cache
 
@@ -165,6 +170,10 @@ jobs:
 
   # libFuzzer needs nightly, so it stays out of the merge gate: a flaky runner
   # must not block a pull request. It still runs per push.
+  #
+  # Every `cargo fuzz` call names `+nightly` on the command line:
+  # `rust-toolchain.toml` pins stable, and a pin beats `rustup default`, so a
+  # bare `cargo fuzz` runs the stable compiler and dies on `-Zsanitizer`.
   fuzz:
     name: fuzz (smoke)
     runs-on: ubuntu-latest
@@ -180,13 +189,13 @@ jobs:
           tool: cargo-fuzz
 
       - name: fuzz_validate
-        run: cargo fuzz run fuzz_validate -- -max_total_time=60
+        run: cargo +nightly fuzz run fuzz_validate -- -max_total_time=60
 
       - name: fuzz_oplog_escape
-        run: cargo fuzz run fuzz_oplog_escape -- -max_total_time=60
+        run: cargo +nightly fuzz run fuzz_oplog_escape -- -max_total_time=60
 
       - name: fuzz_rule_toml
-        run: cargo fuzz run fuzz_rule_toml -- -max_total_time=60
+        run: cargo +nightly fuzz run fuzz_rule_toml -- -max_total_time=60
 
   # A broken relative link in README/SAFETY is the first sign of a stale claim.
   docs:

@@ -26,6 +26,11 @@ allow = [
   "MIT",
   "Apache-2.0",
   "Unicode-3.0",
+  # `foldhash`, through `hashbrown` and `indexmap`. Zlib is permissive and
+  # OSI-approved: it asks for attribution and forbids misrepresenting the
+  # origin, and it does not reach the whole binary the way a copyleft licence
+  # would. Allowed on the licence's terms, not because it is in the build.
+  "Zlib",
 ]
 # The crates we author are licensed in the workspace manifest; nothing here
 # needs a per-crate exception yet. Add one only with the reason written down,

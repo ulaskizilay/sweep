@@ -18,7 +18,7 @@ clap_complete.workspace = true
 clap_mangen.workspace = true
 crossterm = "0.29.0"
 libc.workspace = true
-ratatui = "0.29.0"
+ratatui = "0.30"
 serde = { workspace = true }
 serde_json.workspace = true
 sweep-core = { path = "../sweep-core" }

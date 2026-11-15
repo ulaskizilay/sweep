@@ -431,20 +431,25 @@ fn a_symlinked_base_directory_is_followed_to_its_physical_path() {
 
 /// A symlink that resolves into a protected tree is refused, even though the
 /// literal path looks harmless.
+///
+/// The target is a path every Linux has (`/etc/passwd`), not a directory that
+/// only some distributions ship: the earlier `/usr/lib/firmware` version passed
+/// on a machine with `linux-firmware` installed and answered `not_found` on a
+/// runner without it, so the test proved the host, not the guard.
 #[test]
 fn a_symlink_into_a_protected_tree_is_refused() {
     let temp = tempfile::tempdir().expect("tempdir");
     let home = temp.path().join("home");
     std::fs::create_dir_all(&home).expect("home");
     let link = home.join(".cache");
-    std::os::unix::fs::symlink("/usr/lib", &link).expect("symlink");
+    std::os::unix::fs::symlink("/etc", &link).expect("symlink");
 
     let xdg = xdg_at(&home);
     let probe = RealProbe::new().expect("probe").with_open_scan();
     let allowed = vec![AllowedRoot::new(&link)];
     let ctx = ctx(&xdg, &probe, &allowed);
 
-    let result = verdict(&link.join("firmware"), &ctx);
+    let result = verdict(&link.join("passwd"), &ctx);
     assert_eq!(
         code(&result),
         Reason::SymlinkAncestorEscape(PathBuf::new()).code()
