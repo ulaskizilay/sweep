@@ -633,6 +633,8 @@ exists precisely for that difference.
 | `docs/SAFETY.md` | the safety contract |
 | `docs/RULES.md` | the rule schema, kinds and load-time refusals |
 | `docs/ORPHAN_DATA.md` | the design note for data whose application is gone |
+| `docs/ARTIFACT_CANDIDATES.md` | thresholds and samples for the two artifact candidates |
+| `scripts/` | maintainer probes: read-only, no sudo, pasteable output |
 
 `unsafe` is denied crate-wide except in `sweep-core/src/sys`, where each block
 carries a `// SAFETY:` justification and wraps one syscall.
@@ -644,9 +646,13 @@ carries a `// SAFETY:` justification and wraps one syscall.
   described in memory instead.
 - `PermissiveProbe` claims every path exists, so property and corpus tests reach
   the deep checks instead of stopping at `not_found`.
-- `RealProbe` must be built with `.with_open_scan()`. Without it every path is
-  refused with `probe_unknown` — which is the intended fail-closed behaviour, and
-  a confusing first surprise when writing a test.
+- `RealProbe` must state its open-file set: `.with_open_scan()` in production,
+  `.with_open_inodes(...)` in a test. Without either, every path is refused with
+  `probe_unknown` — the intended fail-closed behaviour, and a confusing first
+  surprise when writing a test. A test states the set rather than scanning
+  `/proc`, because overlayfs reports the underlying layers' inode numbers, so a
+  file the test just created can share `(dev, ino)` with an unrelated open file
+  and be refused for the wrong reason.
 - The root refusal is tested against a genuine `uid 0` process via `unshare -r`,
   not by inspecting a boolean.
 
