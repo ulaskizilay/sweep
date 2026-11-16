@@ -339,6 +339,23 @@ sections that genuinely need privilege will ask for it one operation at a time.
 
 ## Install
 
+The published archive is the shortest path on x86_64: one tarball with the
+binary, the man pages and the three completions, plus a checksum to check it
+against.
+
+```bash
+tag=V0.1.1
+base=https://github.com/ulaskizilay/sweep/releases/download/$tag
+curl -fLO "$base/sweep-0.1.1-x86_64-linux.tar.gz"
+curl -fLO "$base/SHA256SUMS"
+sha256sum -c --ignore-missing SHA256SUMS
+tar -xzf sweep-0.1.1-x86_64-linux.tar.gz
+install -m755 sweep-0.1.1-x86_64-linux/bin/sweep ~/.local/bin/
+```
+
+The repository is private, so the URLs above need an authenticated `gh` or
+token; the archive itself carries no such requirement.
+
 The tracking package builds `main`, and it lives in this repository until it is
 submitted to the AUR:
 
@@ -357,9 +374,9 @@ cargo build --release --locked
 ./target/release/sweep doctor
 ```
 
-A stable `sweep-cli` package needs a `V*` tag, a tarball checksum and
+A stable `sweep-cli` package needs the tag's source tarball checksum and
 `updpkgsums`; [`packaging/README.md`](packaging/README.md) lists what it takes,
-and why neither package is faked here.
+and why that package is not faked here.
 
 ### Completions and the man page
 
