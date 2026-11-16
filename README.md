@@ -344,17 +344,19 @@ binary, the man pages and the three completions, plus a checksum to check it
 against.
 
 ```bash
-tag=V0.1.1
-base=https://github.com/ulaskizilay/sweep/releases/download/$tag
-curl -fLO "$base/sweep-0.1.1-x86_64-linux.tar.gz"
-curl -fLO "$base/SHA256SUMS"
-sha256sum -c --ignore-missing SHA256SUMS
-tar -xzf sweep-0.1.1-x86_64-linux.tar.gz
-install -m755 sweep-0.1.1-x86_64-linux/bin/sweep ~/.local/bin/
+gh release download -R ulaskizilay/sweep \
+  -p 'sweep-*-x86_64-linux.tar.gz' -p SHA256SUMS
+sha256sum -c SHA256SUMS
+tar -xzf sweep-*-x86_64-linux.tar.gz
+install -m755 sweep-*/bin/sweep ~/.local/bin/
 ```
 
-The repository is private, so the URLs above need an authenticated `gh` or
-token; the archive itself carries no such requirement.
+`gh release download` needs an authenticated `gh` because the repository is
+private; the archive itself does not. To pin a version, name the tag and its
+archive: `gh release download V0.1.1 -R ulaskizilay/sweep -p 'sweep-0.1.1-*' -p
+SHA256SUMS`. Or fetch both files from
+`https://github.com/ulaskizilay/sweep/releases/download/V0.1.1/` with any HTTP
+client that can authenticate.
 
 The tracking package builds `main`, and it lives in this repository until it is
 submitted to the AUR:
