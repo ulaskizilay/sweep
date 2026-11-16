@@ -433,6 +433,7 @@ fn compute_hash(items: &[PlanItem]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::probe::{OpenInodes, RealProbe};
     use crate::validate::{AllowedRoot, Policy};
     use crate::Xdg;
 
@@ -514,7 +515,9 @@ mod tests {
         std::fs::create_dir_all(cache.join("outer/inner")).unwrap();
         std::fs::write(cache.join("outer/inner/notes.txt"), b"body").unwrap();
 
-        let probe = crate::probe::RealProbe::new().unwrap().with_open_scan();
+        let probe = RealProbe::new()
+            .unwrap()
+            .with_open_inodes(OpenInodes::default());
         let xdg = Xdg::resolve(|key| match key {
             "HOME" => Some(home.as_os_str().to_os_string()),
             _ => None,

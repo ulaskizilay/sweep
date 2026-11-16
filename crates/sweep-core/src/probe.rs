@@ -42,6 +42,16 @@ impl OpenInodes {
     /// Unreadable processes are skipped: we can only prove a file is open, never
     /// the opposite, and a permission error must not stop a cleanup of the
     /// user's own caches.
+    ///
+    /// The key is `(st_dev, st_ino)`, and that pair is not unique on every
+    /// filesystem: overlayfs reports the underlying layers' numbers, so a file
+    /// created in the upper layer can share both with an unrelated open file in
+    /// the lower one. A hit therefore proves "some open handle carries this
+    /// key", not "this path is open", and validation turns a hit into a refusal.
+    /// That is the safe direction - sweep never removes a file it cannot clear -
+    /// but it means a test must state its open set instead of snapshotting the
+    /// machine, or a collision decides the outcome. See
+    /// [`RealProbe::with_open_inodes`].
     pub fn scan() -> Self {
         let mut map = HashMap::new();
         let mut budget: usize = 200_000;
@@ -126,6 +136,19 @@ impl RealProbe {
     /// Runs the `/proc` scan. Call once per command, before planning.
     pub fn with_open_scan(mut self) -> Self {
         self.open = Some(OpenInodes::scan());
+        self
+    }
+
+    /// States the open handles instead of reading `/proc`.
+    ///
+    /// Tests use this to describe what is open, rather than inherit what the
+    /// machine happens to hold: the scan's `(st_dev, st_ino)` key is not unique
+    /// on overlayfs, so a file a test just created can collide with an unrelated
+    /// handle and be refused. The refusal is correct behaviour, but it is the
+    /// host talking, not the code under test. An empty set is the honest
+    /// starting point when the open-file gate is not the subject.
+    pub fn with_open_inodes(mut self, open: OpenInodes) -> Self {
+        self.open = Some(open);
         self
     }
 

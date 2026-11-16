@@ -17,7 +17,8 @@ use sweep_core::fs_facts::MountTable;
 use sweep_core::paths::is_within;
 use sweep_core::policy::PROTECTED_ROOTS;
 use sweep_core::{
-    AllowedRoot, FsProbe, Mode, Plan, Policy, RealProbe, Reason, RuleId, ValidateCtx, Verdict, Xdg,
+    AllowedRoot, FsProbe, Mode, OpenInodes, Plan, Policy, RealProbe, Reason, RuleId, ValidateCtx,
+    Verdict, Xdg,
 };
 use sweep_testkit::{FakeProbe, PermissiveProbe, SAMPLE_MOUNTS};
 
@@ -419,7 +420,9 @@ fn a_symlinked_base_directory_is_followed_to_its_physical_path() {
     std::fs::write(&file, b"x").expect("write");
 
     let xdg = xdg_at(&home);
-    let probe = RealProbe::new().expect("probe").with_open_scan();
+    let probe = RealProbe::new()
+        .expect("probe")
+        .with_open_inodes(OpenInodes::default());
     let allowed = vec![AllowedRoot::new(&link)];
     let ctx = ctx(&xdg, &probe, &allowed);
 
@@ -445,7 +448,9 @@ fn a_symlink_into_a_protected_tree_is_refused() {
     std::os::unix::fs::symlink("/etc", &link).expect("symlink");
 
     let xdg = xdg_at(&home);
-    let probe = RealProbe::new().expect("probe").with_open_scan();
+    let probe = RealProbe::new()
+        .expect("probe")
+        .with_open_inodes(OpenInodes::default());
     let allowed = vec![AllowedRoot::new(&link)];
     let ctx = ctx(&xdg, &probe, &allowed);
 
@@ -469,7 +474,9 @@ fn dry_run_parity_on_a_real_tree() {
     std::fs::write(cache.join("old").join("nested.bin"), b"payload").expect("write");
 
     let xdg = xdg_at(&home);
-    let probe = RealProbe::new().expect("probe").with_open_scan();
+    let probe = RealProbe::new()
+        .expect("probe")
+        .with_open_inodes(OpenInodes::default());
     let allowed = vec![AllowedRoot::new(&cache)];
     let ctx = ctx(&xdg, &probe, &allowed);
     let rule = RuleId::new("test.rule").expect("valid");
@@ -563,4 +570,55 @@ fn mount_lookup_picks_the_longest_prefix() {
     // directory; it must fall through to the root mount.
     let lookalike = table.find(Path::new("/homepage")).expect("match");
     assert_eq!(lookalike.mount_point, PathBuf::from("/"));
+}
+
+/// The open-file gate answers from the set it was given, not from the machine.
+///
+/// This is the seam the funnel tests use. A live `/proc` snapshot is not a
+/// stable input on overlayfs: it reports the underlying layers' inode numbers,
+/// so a file created after the scan can carry the same `(st_dev, st_ino)` as an
+/// unrelated open one, and validation then refuses a file nobody holds. Stating
+/// the set keeps the gate testable and keeps a test that is about something
+/// else from inheriting the host's answer.
+#[test]
+fn a_stated_open_handle_is_refused_on_a_real_file() {
+    use std::os::unix::fs::MetadataExt;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let cache = home.join(".cache");
+    std::fs::create_dir_all(&cache).expect("cache");
+    let file = cache.join("live.db");
+    std::fs::write(&file, b"payload").expect("write");
+
+    let metadata = std::fs::symlink_metadata(&file).expect("stat");
+    let holder = OpenInodes::from_pairs([(
+        (metadata.dev(), metadata.ino()),
+        sweep_core::ProcRef {
+            pid: 4242,
+            name: "sqlite".into(),
+        },
+    )]);
+
+    let xdg = xdg_at(&home);
+    let allowed = vec![AllowedRoot::new(&cache)];
+
+    let busy = RealProbe::new().expect("probe").with_open_inodes(holder);
+    let busy_ctx = ctx(&xdg, &busy, &allowed);
+    match verdict(&file, &busy_ctx).reason() {
+        Some(Reason::OpenByProcess { pid, name }) => {
+            assert_eq!((*pid, name.as_str()), (4242, "sqlite"));
+        }
+        other => panic!("expected an open-file refusal, got {other:?}"),
+    }
+
+    let idle = RealProbe::new()
+        .expect("probe")
+        .with_open_inodes(OpenInodes::default());
+    let idle_ctx = ctx(&xdg, &idle, &allowed);
+    assert!(
+        verdict(&file, &idle_ctx).is_allow(),
+        "an empty set must not refuse the file: {:?}",
+        verdict(&file, &idle_ctx).reason()
+    );
 }

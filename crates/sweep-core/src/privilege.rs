@@ -696,7 +696,7 @@ pub fn request_from(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::probe::RealProbe;
+    use crate::probe::{OpenInodes, RealProbe};
     use crate::validate::Owner;
     use std::os::unix::fs::MetadataExt;
 
@@ -756,7 +756,9 @@ recoverable = true
     }
 
     fn run(request: &Request, roots: &[AllowedRoot], rules: &[Rule]) -> Reply {
-        let probe = RealProbe::new().expect("probe").with_open_scan();
+        let probe = RealProbe::new()
+            .expect("probe")
+            .with_open_inodes(OpenInodes::default());
         apply_with(request, &probe, roots, rules).expect("the request itself is valid")
     }
 
@@ -875,7 +877,9 @@ keep_days = 7
     fn a_rule_the_child_does_not_know_refuses_the_whole_request() {
         let temp = fixture(&["root/victim"]);
         let root = temp.path().join("root");
-        let probe = RealProbe::new().expect("probe").with_open_scan();
+        let probe = RealProbe::new()
+            .expect("probe")
+            .with_open_inodes(OpenInodes::default());
         let error = apply_with(
             &request(vec![item("user.made.up", &temp.path().join("root/victim"))]),
             &probe,
@@ -973,7 +977,9 @@ keep_days = 7
             _ => None,
         })
         .expect("home");
-        let probe = RealProbe::new().expect("probe").with_open_scan();
+        let probe = RealProbe::new()
+            .expect("probe")
+            .with_open_inodes(OpenInodes::default());
         let mounts = crate::fs_facts::MountTable::load().expect("mounts");
         let allowed = [
             AllowedRoot::new(&root),

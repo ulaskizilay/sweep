@@ -2715,7 +2715,9 @@ fn now_unix() -> i64 {
 mod tests {
     use super::*;
     use std::fs::{File, FileTimes};
+    use std::os::unix::fs::MetadataExt;
     use std::time::{Duration, SystemTime};
+    use sweep_core::probe::OpenInodes;
 
     fn xdg_at(home: &Path) -> Xdg {
         Xdg::resolve(|key| match key {
@@ -2756,7 +2758,9 @@ mod tests {
         let set = RuleSet::from_sources(&[sweep_core::rules::Source::new("test.toml", body)], &xdg)
             .expect("rule pack loads");
         let mounts = MountTable::load().expect("mounts");
-        let probe = RealProbe::new().expect("probe").with_open_scan();
+        let probe = RealProbe::new()
+            .expect("probe")
+            .with_open_inodes(OpenInodes::default());
         let Built { plan, mut report } = build(
             Scope::CLEAN,
             &set,
@@ -3147,7 +3151,9 @@ privilege = "user"
         let body = single_rule("test.app", "dir-sweep", &root, 0);
         let xdg = xdg_at(temp.path());
         let mounts = MountTable::load().expect("mounts");
-        let probe = RealProbe::new().expect("probe").with_open_scan();
+        let probe = RealProbe::new()
+            .expect("probe")
+            .with_open_inodes(OpenInodes::default());
         let set = || {
             RuleSet::from_sources(&[sweep_core::rules::Source::new("test.toml", &body)], &xdg)
                 .expect("rule pack loads")
@@ -3244,7 +3250,9 @@ privilege = "user"
             RuleSet::from_sources(&[sweep_core::rules::Source::new("test.toml", &body)], &xdg)
                 .expect("rule pack loads");
         let mounts = MountTable::load().expect("mounts");
-        let probe = RealProbe::new().expect("probe").with_open_scan();
+        let probe = RealProbe::new()
+            .expect("probe")
+            .with_open_inodes(OpenInodes::default());
         let Built { plan, report } = build(
             Scope::CLEAN,
             &set,
@@ -3414,7 +3422,9 @@ privilege = "user"
             RuleSet::from_sources(&[sweep_core::rules::Source::new("test.toml", &body)], &xdg)
                 .expect("rule pack loads");
         let mounts = MountTable::load().expect("mounts");
-        let probe = RealProbe::new().expect("probe").with_open_scan();
+        let probe = RealProbe::new()
+            .expect("probe")
+            .with_open_inodes(OpenInodes::default());
         let Built { plan, .. } = build(
             Scope::CLEAN,
             &set,
@@ -3471,13 +3481,26 @@ privilege = "user"
 
         let held = File::open(old.join("codex")).expect("open");
 
+        // The handle is stated, not scanned for: a live `/proc` snapshot would
+        // also match unrelated files on this host (overlayfs can report the same
+        // `(st_dev, st_ino)` for files on different layers), so the test would
+        // prove the machine instead of the withdraw rule.
+        let metadata = held.metadata().expect("stat the held file");
+        let open = OpenInodes::from_pairs([(
+            (metadata.dev(), metadata.ino()),
+            sweep_core::ProcRef {
+                pid: std::process::id(),
+                name: "sweep-test".into(),
+            },
+        )]);
+
         let xdg = xdg_at(temp.path());
         let body = versions_body(&root, &launcher, 1);
         let set =
             RuleSet::from_sources(&[sweep_core::rules::Source::new("test.toml", &body)], &xdg)
                 .expect("rule pack loads");
         let mounts = MountTable::load().expect("mounts");
-        let probe = RealProbe::new().expect("probe").with_open_scan();
+        let probe = RealProbe::new().expect("probe").with_open_inodes(open);
         let Built { plan, report } = build(
             Scope::CLEAN,
             &set,
@@ -3634,7 +3657,9 @@ privilege = "user"
             RuleSet::from_sources(&[sweep_core::rules::Source::new("test.toml", &body)], &xdg)
                 .expect("pack loads");
         let mounts = MountTable::load().expect("mounts");
-        let probe = RealProbe::new().expect("probe").with_open_scan();
+        let probe = RealProbe::new()
+            .expect("probe")
+            .with_open_inodes(OpenInodes::default());
         let Built { plan, .. } = build(
             Scope::CLEAN,
             &set,

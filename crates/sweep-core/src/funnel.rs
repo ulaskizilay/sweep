@@ -279,7 +279,7 @@ pub fn now_unix() -> i64 {
 mod tests {
     use super::*;
     use crate::plan::RuleId;
-    use crate::probe::RealProbe;
+    use crate::probe::{OpenInodes, RealProbe};
     use crate::validate::{AllowedRoot, Policy, ValidateCtx, Verdict};
     use crate::Xdg;
     use std::path::Path;
@@ -292,7 +292,14 @@ mod tests {
             _ => None,
         })
         .unwrap();
-        let probe = RealProbe::new().unwrap().with_open_scan();
+        // The open-file gate has its own tests with stated handles
+        // (`an_open_file_is_refused` in `tests/properties.rs`); a live `/proc`
+        // snapshot would let the host decide this test, because overlayfs can
+        // give a fresh temp file the same `(st_dev, st_ino)` as an unrelated
+        // open one.
+        let probe = RealProbe::new()
+            .unwrap()
+            .with_open_inodes(OpenInodes::default());
         (temp, xdg, probe)
     }
 

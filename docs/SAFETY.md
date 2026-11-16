@@ -325,6 +325,15 @@ Unreadable processes are skipped. This is deliberate: we can prove a file *is*
 open, never that it is not, and a permission error on another user's process must
 not block cleaning the user's own cache.
 
+`(dev, ino)` is not a unique name for a file on every filesystem. Overlayfs
+reports the underlying layers' numbers, so a file in the upper layer can share
+both with an unrelated file in the lower one, and the hit then refuses a file
+nobody holds open. That is the safe direction - the scan can only add refusals,
+never remove one - but it means the pair proves "an open handle carries this
+key", not "this path is open". A test therefore states its open set
+(`RealProbe::with_open_inodes`) instead of snapshotting the machine; otherwise a
+collision on the runner decides what the test observes.
+
 ### SQLite sidecars
 
 `-wal`, `-shm` and `-journal` are meaningless without their database, and the
