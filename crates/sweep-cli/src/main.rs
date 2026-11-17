@@ -105,7 +105,8 @@ enum Command {
     /// Remove installer files that have already been installed or can be fetched again.
     ///
     /// The target is the archive, never the installed program: package files and
-    /// images under `~/Downloads` that nobody has touched for a month.
+    /// images in the downloads directory (`XDG_DOWNLOAD_DIR`, default
+    /// `~/Downloads`) that nobody has touched for a month.
     Installer {
         /// Show the plan and stop: no deletion, no operation-log entry.
         #[arg(long, conflicts_with = "yes")]

@@ -36,6 +36,8 @@ pub(crate) struct XdgReport {
     data: String,
     state: String,
     runtime: String,
+    /// From `user-dirs.dirs`: the locale-dependent directory `installer` reads.
+    download: String,
     warnings: Vec<String>,
 }
 
@@ -95,6 +97,7 @@ fn gather() -> Result<Report, String> {
             data: xdg.data.display().to_string(),
             state: xdg.state.display().to_string(),
             runtime: xdg.runtime.display().to_string(),
+            download: xdg.download.display().to_string(),
             warnings: xdg.warnings.clone(),
         },
         mounts: mounts
@@ -200,6 +203,7 @@ fn render_human(report: &Report) -> String {
     let _ = writeln!(out, "config          {}", report.xdg.config);
     let _ = writeln!(out, "data            {}", report.xdg.data);
     let _ = writeln!(out, "state           {}", report.xdg.state);
+    let _ = writeln!(out, "download        {}", report.xdg.download);
     let _ = writeln!(
         out,
         "state writable  {}",
@@ -331,6 +335,7 @@ mod render_tests {
                 data: "/home/u/.local/share".into(),
                 state: "/home/u/.local/state".into(),
                 runtime: "/run/user/1000".into(),
+                download: "/home/u/Downloads".into(),
                 warnings: vec![],
             },
             mounts: vec![

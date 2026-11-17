@@ -111,6 +111,14 @@ whole path segment:
 | `{data}` | `$XDG_DATA_HOME`, default `~/.local/share` |
 | `{state}` | `$XDG_STATE_HOME`, default `~/.local/state` |
 | `{runtime}` | `$XDG_RUNTIME_DIR`, default `/run/user/<uid>` |
+| `{download}` | `XDG_DOWNLOAD_DIR` from `~/.config/user-dirs.dirs`, default `~/Downloads` |
+
+`{download}` is the one base that is not an XDG base directory. The name is
+locale-dependent, so it comes from the user-dirs setting; a value that is
+relative, a protected root, an ancestor of `$HOME`, or a marker for a disabled
+directory falls back to `~/Downloads` with a warning. An exported
+`XDG_DOWNLOAD_DIR` is ignored: a deletion root is never taken from the
+environment.
 
 `{home}/.cargo` is valid. `{home}.cargo` is refused: it expands to
 `/home/alice.cargo`, which is almost always a typo and invisible when reading

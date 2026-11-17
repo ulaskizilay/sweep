@@ -14,9 +14,12 @@
 #
 # The scope is deliberately narrow:
 #
-#   * only `{home}/Downloads`, because that is where a browser puts a download.
-#     An `.iso` under `~/VMs` or `~/.local/share/libvirt` is a disk image a
-#     virtual machine is running, not an installer.
+#   * only the user's downloads directory, because that is where a browser puts
+#     a download. It is `XDG_DOWNLOAD_DIR` from `~/.config/user-dirs.dirs`,
+#     falling back to `~/Downloads`; the name is locale-dependent, so a hardcoded
+#     `~/Downloads` finds nothing on a machine where it is `~/İndirilenler` or
+#     `~/Téléchargements`. An `.iso` under `~/VMs` or `~/.local/share/libvirt` is
+#     a disk image a virtual machine is running, not an installer.
 #   * two levels deep, so `Downloads/arch/x.iso` is found and an arbitrarily deep
 #     archive tree is not.
 #   * no `.exe` and no `.msi`. A portable Windows program is that single file;
@@ -31,6 +34,17 @@
 # be the copy a user is about to install, or the one they kept for an offline
 # reinstall. A month is long enough that it has been *downloaded and forgotten*
 # rather than *downloaded and pending*.
+#
+# Roots that were considered and are deliberately not scanned:
+#
+#   * `Downloads/Telegram Desktop` needs no rule of its own. It is a child of the
+#     downloads directory, and the two-level walk already reaches it.
+#   * a Homebrew downloads cache (`~/.cache/Homebrew/downloads`) is a tool cache,
+#     not a hand download: the tool owns it, `brew cleanup` is the operation that
+#     empties it, and a bottle removed under a running `brew` is a race.
+#   * iCloud Drive and the macOS Mail attachments directory are macOS paths. There
+#     is no equivalent here, and a root that never matches is a promise the rule
+#     does not keep.
 
 [meta]
 name = "installers"
@@ -40,7 +54,7 @@ description = "Downloaded package and image files: .pkg.tar.*, .deb, .rpm, .AppI
 id = "installer.downloads"
 section = "installers"
 kind = "file-pattern"
-root = "{home}/Downloads"
+root = "{download}"
 pattern = [
   "*.pkg.tar.*",
   "*.deb",

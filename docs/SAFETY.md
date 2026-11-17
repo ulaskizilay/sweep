@@ -200,6 +200,14 @@ Also protected: the home directory itself, every XDG base directory
 (`~/.cache`, `~/.config`, `~/.local/share`, `~/.local/state`,
 `$XDG_RUNTIME_DIR`), and the tool's own runtime directory.
 
+The downloads directory is not on that list, and it does not need to be. It is
+not an XDG base: it comes from `XDG_DOWNLOAD_DIR` in `user-dirs.dirs`, and its
+only role is being a rule root. A rule root is refused as a target by
+`allowed_root_itself` and `root_itself`, so `~/Downloads` cannot be removed
+whole. A value that is relative, a protected root, an ancestor of `$HOME`, or
+the marker for a disabled directory falls back to `~/Downloads` with a warning;
+a deletion root is never taken from the environment.
+
 The base directories are protected **as targets** while their children are not:
 removing `~/.cache` takes the whole tree and defeats every per-rule decision
 inside it. This is why `AllowedRoot::allow_root_itself` defaults to `false` and

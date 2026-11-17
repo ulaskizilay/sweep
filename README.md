@@ -274,8 +274,11 @@ using the mirror, the `.deb` for a foreign package, the `.iso` burned once, the
 unpacked files and the application's own state are untouched, so removing the
 archive never uninstalls anything.
 
-The rule is narrow on purpose. It reads `~/Downloads` two levels deep and it
-matches six suffixes, because the name is the only evidence there is. It does
+The rule is narrow on purpose. It reads the user's downloads directory two
+levels deep and it matches six suffixes, because the name is the only evidence
+there is. That directory is `XDG_DOWNLOAD_DIR` from
+`~/.config/user-dirs.dirs` - `~/İndirilenler` on a Turkish machine - and falls
+back to `~/Downloads`; a hardcoded English name would find nothing elsewhere. It does
 not take `.zip`, `.tar.gz` or `.7z` (as likely to be a source export or a backup
 as an installer), and it does not take `.exe` or `.msi` (a portable Windows
 program *is* that file; removing it is an uninstall, which is a different
@@ -411,7 +414,7 @@ because it is a build helper, not a command to type.
 | `sweep clean --only model-caches` | the opt-in section: model blobs, checkpoint caches | works |
 | `sweep clean --privileged` | also sweep root-owned system caches, through `run0` or `sudo` | works |
 | `sweep purge` | `node_modules`, `target`, virtualenvs — only where a manifest says a build made them | works |
-| `sweep installer` | package and image files in `~/Downloads` that were never touched again | works |
+| `sweep installer` | package and image files in the configured downloads directory that were never touched again | works |
 | `sweep status` | disk, inodes, memory, load, package cache, orphan packages, orphan cache data, trash, orphaned user units, last sweep; `--json` for scripts | works |
 | `sweep analyze` | the disk explorer, and `--largest` for a pipe; the only deletion is a move to the trash | works |
 | `sweep history` | every run from the operation log, grouped by session; `--json` for scripts | works |

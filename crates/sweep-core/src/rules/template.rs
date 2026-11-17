@@ -31,16 +31,23 @@ pub enum Base {
     Data,
     State,
     Runtime,
+    /// The user's downloads directory, from `user-dirs.dirs`.
+    ///
+    /// It is a template base but not an XDG base directory: the name is
+    /// locale-dependent, and it exists so `sweep installer` reads the setting
+    /// instead of a hardcoded `~/Downloads`.
+    Download,
 }
 
 impl Base {
-    pub const ALL: [Base; 6] = [
+    pub const ALL: [Base; 7] = [
         Base::Home,
         Base::Cache,
         Base::Config,
         Base::Data,
         Base::State,
         Base::Runtime,
+        Base::Download,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -51,6 +58,7 @@ impl Base {
             Base::Data => "data",
             Base::State => "state",
             Base::Runtime => "runtime",
+            Base::Download => "download",
         }
     }
 
@@ -66,6 +74,7 @@ impl Base {
             Base::Data => &xdg.data,
             Base::State => &xdg.state,
             Base::Runtime => &xdg.runtime,
+            Base::Download => &xdg.download,
         }
     }
 }
@@ -475,6 +484,7 @@ mod tests {
             ),
             ("{state}/sweep", "/home/u/.local/state/sweep".to_string()),
             ("{runtime}/app", runtime),
+            ("{download}/arch", "/home/u/Downloads/arch".to_string()),
         ];
         for (raw, expected) in cases {
             let template = Template::parse(raw).expect(raw);

@@ -2516,6 +2516,49 @@ fn installer_takes_archives_from_downloads_and_leaves_the_rest() {
 }
 
 #[test]
+fn installer_reads_the_configured_downloads_directory() {
+    // The directory name is locale-dependent - `~/İndirilenler` on this machine's
+    // locale, `~/Downloads` on an English one - so the rule reads
+    // `XDG_DOWNLOAD_DIR` instead of assuming the English name. Before this, a
+    // machine whose browser downloads elsewhere got an empty preview.
+    let home = home();
+    write(
+        home.path(),
+        ".config/user-dirs.dirs",
+        "# written by xdg-user-dirs-update\nXDG_DOWNLOAD_DIR=\"$HOME/İndirilenler\"\n",
+    );
+    write(home.path(), "İndirilenler/arch/linux.iso", "payload");
+    write(home.path(), "Downloads/other.iso", "payload");
+    age_file(&home.path().join("İndirilenler/arch/linux.iso"), 60);
+    age_file(&home.path().join("Downloads/other.iso"), 60);
+
+    let dry = run_in(home.path(), &["installer", "--dry-run", "--json"]);
+    assert_eq!(dry.code, Some(0), "stderr: {}", dry.stderr);
+    let report: serde_json::Value = serde_json::from_str(&dry.stdout).expect("one document");
+    let rule = report["rules"]
+        .as_array()
+        .expect("rules")
+        .iter()
+        .find(|run| run["id"] == "installer.downloads")
+        .expect("the installer rule is listed");
+    assert_eq!(
+        rule["items"], 1,
+        "only the configured directory is read: {rule}"
+    );
+
+    let applied = run_in(home.path(), &["installer", "--yes"]);
+    assert_eq!(applied.code, Some(0), "stderr: {}", applied.stderr);
+    assert!(
+        !home.path().join("İndirilenler/arch/linux.iso").exists(),
+        "the configured directory is where the installer was found"
+    );
+    assert!(
+        home.path().join("Downloads/other.iso").exists(),
+        "the setting replaces `~/Downloads`; it does not add a second root"
+    );
+}
+
+#[test]
 fn a_bare_clean_names_installer_instead_of_sweeping_downloads() {
     let home = home();
     write(home.path(), "Downloads/pkg.pkg.tar.zst", "payload");
