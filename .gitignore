@@ -19,3 +19,7 @@ __pycache__/
 /packaging/*/gen
 /packaging/*/*.pkg.tar.*
 /packaging/*/sweep-*/
+# The source tarballs makepkg downloads into `packaging/*/`. `.pkg.tar.*` above
+# does not match them: `sweep-cli-0.1.2.tar.gz` ends in `.tar.gz`, and a 400 KiB
+# copy of the release inside the repository is worse than a rebuild.
+/packaging/*/*.tar.gz
