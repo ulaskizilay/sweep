@@ -128,7 +128,7 @@ seven-point contract above stays a contract rather than an implementation plan.
 The probe was run again on this date — 99 directories of at least 1 MiB — and it
 produced the counterexample the contract was missing:
 
-| Directory | Size | `exec` | `pkg` | `flatpak` | `bin` | rule |
+| Directory | Size | `exec` | `pkg` | `flatpak` | `bin` | dedicated rule |
 |---|---|---|---|---|---|---|
 | `~/.cache/ms-playwright` | 1.6 GiB | — | — | — | — | — |
 | `~/.cache/transcribe-venv` | 7.2 GiB | — | — | — | — | — |
@@ -140,17 +140,23 @@ Playwright downloaded and launches by absolute path out of its own manifest, so
 it has no desktop entry, no command on `PATH` and no pacman package. Every
 evidence source this contract allows says "no owner", and the directory is not
 disposable: deleting it breaks every Playwright test on the machine until
-`playwright install` runs again. A rule built on the four absences would delete
-it, and the sentence in the preview ("no application owns this") would be true
-and irrelevant.
+`playwright install` runs again.
 
-That is not a gap in the checks, it is the shape of the question. Absence of
-ownership evidence is what a *library* cache looks like, and the contract's own
-rule 4 says a library cache needs a named rule. `ms-playwright` has one job and
-no owner record; the same is true of `transcribe-venv`, which is a virtualenv a
-script made and a person may still call. The measured surface is 7.2 GiB of
-directories whose only defect is that nothing claims them, and the first false
-positive costs more than the whole reclaim.
+The `status` row does skip it today, because `user.cache.residual`'s `exclude`
+list happens to name `ms-playwright*`. That is the whole argument rather than a
+rebuttal: the exclusion exists because the directory was found on this machine
+once, not because the evidence sources can tell an installed library's cache
+from an abandoned application's. A deletion rule built on the same four absences
+would need that list to anticipate every library cache on every machine, and the
+first one it has not met yet is deleted as "no application owns this" - a
+sentence that would be true and irrelevant.
+
+Absence of ownership evidence is exactly what a *library* cache looks like, and
+the contract's own rule 4 says a library cache needs a named rule. `ms-playwright`
+has one job and no owner record; the same is true of `transcribe-venv`, a
+virtualenv a script made that a person may still call. The measured surface is
+7.2 GiB of directories whose only defect is that nothing claims them, and the
+first false positive costs more than the whole reclaim.
 
 What would make this worth revisiting is a **positive** owner signal, not a
 missing one: a cache that a package database entry or an installed-app record
