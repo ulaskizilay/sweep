@@ -262,6 +262,13 @@ archives the same run takes — so the planned size and the reported size never
 describe the same bytes twice, and the reported size is still true after an
 apply run.
 
+The helper has the command for the rest. `paru -Sc` and `yay -Sc` clean the
+cached sources and the untracked files in the cache while keeping
+already-downloaded VCS sources, so `sweep aur` names that command in its report
+instead of reaching into the cache itself. Only the helpers whose flag was read
+out of the installed man page are named; `trizen` is in the catalog and gets no
+hint.
+
 The clone directories are still reported, with their size and with the sentence
 saying they were not taken. "There is 12 GiB here you can't have automatically,
 and here is why" is a more useful answer than silence.

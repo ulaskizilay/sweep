@@ -1229,6 +1229,50 @@ fn build(
             opt_in.join(" --only ")
         ));
     }
+    // A report-only row says what stays and why, which is the honest answer but
+    // a dead end: the helper that wrote an AUR cache has its own command for the
+    // rest of it. Naming that command is the difference between "20 GiB you
+    // cannot have automatically" and "20 GiB you cannot have automatically, and
+    // here is the one that can". Only the helpers whose flag was read out of the
+    // installed man page are named; a command sweep has not checked would be a
+    // guess dressed as advice.
+    let mut cache_cleaners: Vec<&str> = Vec::new();
+    for run in &runs {
+        if run.section != Section::Aur.as_str() || run.status != Status::ReportOnly {
+            continue;
+        }
+        // Ids follow `<section>.<helper>.<what>`; a user pack rule that names a
+        // helper sweep does not know gets no claim from here.
+        let mut parts = run.id.split('.');
+        if parts.next() != Some("aur") {
+            continue;
+        }
+        let Some(helper) = parts.next() else {
+            continue;
+        };
+        if let Some((_, command)) = AUR_CACHE_CLEAN.iter().find(|(name, _)| *name == helper) {
+            if !cache_cleaners.contains(command) {
+                cache_cleaners.push(command);
+            }
+        }
+    }
+    if !cache_cleaners.is_empty() {
+        let names = cache_cleaners.join(" and ");
+        notes.push(if cache_cleaners.len() == 1 {
+            format!(
+                "{names} also cleans the cached sources and untracked files in that cache and \
+                 keeps VCS sources; sweep leaves them because a user-edited PKGBUILD exists \
+                 only there"
+            )
+        } else {
+            format!(
+                "{names} also clean the cached sources and untracked files in those caches and \
+                 keep VCS sources; sweep leaves them because a user-edited PKGBUILD exists \
+                 only there"
+            )
+        });
+    }
+
     let incomplete: Vec<&str> = runs
         .iter()
         .filter(|run| run.status == Status::ScanIncomplete)
@@ -1367,6 +1411,15 @@ fn build(
 /// to cover.
 const COPY_ON_WRITE_NOTE: &str = "sizes are the sum of st_blocks; on a copy-on-write \
     filesystem, extents shared with a snapshot or a reflink may free less than that";
+
+/// The AUR helpers whose own cache-clean command was verified, with that command.
+///
+/// `paru -Sc` and `yay -Sc` clean cached AUR packages and the untracked files in
+/// the cache, keeping already-downloaded VCS sources. Both sentences were read
+/// out of the installed man pages, not remembered. `trizen` is deliberately
+/// absent: its flag was not read here, and a command sweep has not checked is
+/// worse than no command at all.
+const AUR_CACHE_CLEAN: &[(&str, &str)] = &[("paru", "paru -Sc"), ("yay", "yay -Sc")];
 
 fn touches_copy_on_write(roots: &[PathBuf], mounts: &MountTable) -> bool {
     roots.iter().any(|root| {

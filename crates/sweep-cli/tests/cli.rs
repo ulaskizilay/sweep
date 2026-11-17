@@ -2396,6 +2396,82 @@ fn the_clone_report_measures_what_the_archive_rule_leaves_behind() {
 }
 
 #[test]
+fn the_clone_report_names_the_helper_command_that_can_clean_it() {
+    // A report-only row that ends at "never deleted" is a dead end: the helper
+    // that wrote the cache has a command for the rest of it, and only the helper
+    // knows which files are safe to drop. The name comes from the installed man
+    // page, so a helper whose flag was not verified stays unnamed.
+    let home = home();
+    write(
+        home.path(),
+        ".cache/paru/clone/tool/PKGBUILD",
+        "pkgname=tool",
+    );
+    write(
+        home.path(),
+        ".cache/paru/clone/tool/tool-1.0.tar.gz",
+        "source",
+    );
+
+    let output = run_in(home.path(), &["aur", "--dry-run", "--json"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("one document");
+    let notes: Vec<&str> = report["notes"]
+        .as_array()
+        .expect("notes")
+        .iter()
+        .filter_map(|note| note.as_str())
+        .collect();
+    let hint = notes
+        .iter()
+        .find(|note| note.contains("-Sc"))
+        .unwrap_or_else(|| panic!("the clone row needs a next action: {notes:?}"));
+    assert!(
+        hint.contains("paru -Sc") && hint.contains("cleans"),
+        "one helper takes the singular form: {hint}"
+    );
+    assert!(
+        !hint.contains("yay"),
+        "a helper with no cache on this machine is not named: {hint}"
+    );
+    assert!(
+        hint.contains("keeps VCS sources"),
+        "the sentence has to say what the helper preserves: {hint}"
+    );
+}
+
+#[test]
+fn a_helper_whose_clean_flag_was_not_verified_gets_no_command_hint() {
+    // `trizen` is in the catalog and its cache is walked, but its clean flag was
+    // never read out of a man page here. Naming a flag sweep has not checked
+    // would be a guess dressed as advice, so the row stays a report.
+    let home = home();
+    write(home.path(), ".cache/trizen/tool/PKGBUILD", "pkgname=tool");
+    write(home.path(), ".cache/trizen/tool/tool-1.0.tar.gz", "source");
+
+    let output = run_in(home.path(), &["aur", "--dry-run", "--json"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("one document");
+    let row = report["rules"]
+        .as_array()
+        .expect("rules")
+        .iter()
+        .find(|row| row["id"] == "aur.trizen.clones")
+        .expect("the clone rule ran");
+    assert_eq!(row["status"], "report_only", "{row}");
+    let notes: Vec<&str> = report["notes"]
+        .as_array()
+        .expect("notes")
+        .iter()
+        .filter_map(|note| note.as_str())
+        .collect();
+    assert!(
+        !notes.iter().any(|note| note.contains("-Sc")),
+        "no unverified command may be named: {notes:?}"
+    );
+}
+
+#[test]
 fn a_bare_clean_names_aur_instead_of_sweeping_helper_caches() {
     let home = home();
     write(

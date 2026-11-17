@@ -34,6 +34,22 @@
 # but the confirmation has to explain git clones and recipes, and a bare
 # `sweep clean` has no room for that. `Section::command()` keeps it out of
 # `clean`, and `sweep clean --only aur` still works for a user who names it.
+#
+# `src/` is the third thing a helper keeps, and it is not a target either. On the
+# maintainer's machine the paru cache is 20 GiB and splits three ways: 8.3 GiB of
+# `*.pkg.tar.*` archives the archive rules take, 2.0 GiB of `src/` trees, and the
+# rest is the upstream tarballs `makepkg` downloaded (seven `docker-desktop-4.9x`
+# images, two `android-studio-rabbit*` archives). The `src/` trees stay for the
+# checksum reason above. The stale upstream tarballs stay because a rule that
+# took "any tarball older than a month" would also take the one the recipe still
+# needs, and the file name cannot tell them apart.
+#
+# The helper has the command for both, and it is the only thing that knows which
+# files are safe to drop: `paru -Sc` and `yay -Sc` clean the cached sources and
+# the untracked files in the cache while keeping already-downloaded VCS sources.
+# `sweep aur` names that command in the report instead of reaching into the cache
+# itself, and it names only the helpers whose flag was read out of the installed
+# man page - `trizen` is in the catalog but gets no hint.
 
 [meta]
 name = "aur"
