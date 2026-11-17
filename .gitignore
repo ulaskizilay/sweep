@@ -11,3 +11,11 @@
 
 # Python bytecode from scripts/ probes.
 __pycache__/
+
+# makepkg output from `packaging/*/`, when a package is built in place.
+# `sweep-*/` is the extracted or cloned source tree (`sweep-0.1.2`, `sweep-cli-git`).
+/packaging/*/src
+/packaging/*/pkg
+/packaging/*/gen
+/packaging/*/*.pkg.tar.*
+/packaging/*/sweep-*/

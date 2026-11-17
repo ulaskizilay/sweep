@@ -1,0 +1,116 @@
+# Maintainer: Ulaş KIZILAY <ulaskizilay@users.noreply.github.com>
+#
+# The stable package: it builds the tag, not `main`, so a version number means
+# one commit rather than whatever the branch held the day the package was made.
+# `sweep-cli-git` is the tracking package next door and conflicts with this one.
+#
+# The source is GitHub's generated tag tarball. That checksum is a real one
+# (unlike the `SKIP` in the tracking package) because the tarball exists only
+# after the tag does: it is what `updpkgsums` reads and what anyone rebuilding
+# the package compares against. GitHub has regenerated archive files before, so
+# if the build ever answers "One or more files did not pass the validity check",
+# re-run `updpkgsums` and treat the new hash as a deliberate change, not a local
+# corruption.
+#
+# The rejected alternative was to package the release archive
+# (`sweep-<ver>-x86_64-linux.tar.gz`) instead: its checksum is uploaded once and
+# cannot drift. That ships a prebuilt binary, which belongs in a `-bin` package
+# and would leave `aarch64` with nothing, because the release job builds x86_64
+# only.
+pkgname=sweep-cli
+pkgver=0.1.2
+pkgrel=1
+pkgdesc='Terminal cleanup and maintenance for Arch Linux'
+arch=('x86_64' 'aarch64')
+url='https://github.com/ulaskizilay/sweep'
+license=('MIT')
+depends=('gcc-libs' 'glibc')
+makedepends=('cargo' 'rust')
+provides=('sweep-cli' 'sweep')
+conflicts=('sweep-cli-git')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/V$pkgver.tar.gz")
+sha256sums=('4b01e2723cce618ada61b0ac08936fe935fa82c28f3307df37adc640913cdf6d')
+
+# GitHub names the archive's root directory `<repo>-<tag without the V>`, so it
+# is `sweep-0.1.2` and not `sweep-cli-0.1.2`. Reading it from `$pkgname` would
+# look right and fail at `prepare()`.
+_src="sweep-$pkgver"
+
+prepare() {
+  cd "$_src"
+  # `--locked` rather than `--frozen`: the manifest and the lock file must agree,
+  # and a dependency that needs fetching is fetched from the versions the lock
+  # file names instead of drifting to the newest compatible one.
+  cargo fetch --locked
+}
+
+build() {
+  cd "$_src"
+  cargo build --release --locked --offline
+
+  # Completions and the man pages come from the same `clap` definition the parser
+  # uses, so an option cannot exist in `--help` and be missing here. They are
+  # generated here, as your normal user, and installed as files further down.
+  # `package()` runs under fakeroot, where `geteuid()` answers 0, and sweep
+  # refuses to run as root on purpose: calling the binary from there turns that
+  # guard into a build failure instead of an install.
+  mkdir -p gen/man gen/bash-completion gen/zsh gen/fish
+  target/release/sweep completions bash \
+    > gen/bash-completion/sweep
+  target/release/sweep completions zsh \
+    > gen/zsh/_sweep
+  target/release/sweep completions fish \
+    > gen/fish/sweep.fish
+
+  # One page per command: the top page names its subcommands as
+  # `sweep-clean(1)`, and a name without a page behind it is a dead end for
+  # anyone who typed `man sweep-clean`. Adding a command means adding a line
+  # here; `__manpage <name>` refuses a name that is not a command.
+  man_page() {
+    local page=$1
+    shift
+    target/release/sweep __manpage "$@" > "gen/man/$page.1"
+  }
+
+  man_page sweep
+  man_page sweep-doctor doctor
+  man_page sweep-rules rules
+  man_page sweep-rules-list rules list
+  man_page sweep-rules-verify rules verify
+  man_page sweep-clean clean
+  man_page sweep-status status
+  man_page sweep-purge purge
+  man_page sweep-installer installer
+  man_page sweep-uninstall uninstall
+  man_page sweep-optimize optimize
+  man_page sweep-history history
+  man_page sweep-analyze analyze
+  man_page sweep-aur aur
+  man_page sweep-completions completions
+}
+
+check() {
+  cd "$_src"
+  # The suite runs here, before the fakeroot step: it proves the tree that was
+  # just built, and `cargo test --offline` fails rather than fetching a crate the
+  # lock file does not already name.
+  cargo test --release --locked --offline
+}
+
+package() {
+  cd "$_src"
+
+  install -Dm755 target/release/sweep "$pkgdir/usr/bin/sweep"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+  install -Dm644 gen/bash-completion/sweep \
+    "$pkgdir/usr/share/bash-completion/completions/sweep"
+  install -Dm644 gen/zsh/_sweep \
+    "$pkgdir/usr/share/zsh/site-functions/_sweep"
+  install -Dm644 gen/fish/sweep.fish \
+    "$pkgdir/usr/share/fish/vendor_completions.d/sweep.fish"
+
+  for page in gen/man/*.1; do
+    install -Dm644 "$page" "$pkgdir/usr/share/man/man1/$(basename "$page")"
+  done
+}

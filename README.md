@@ -362,17 +362,18 @@ install -m755 sweep-*/bin/sweep ~/.local/bin/
 ```
 
 The repository is public, so `gh` needs no authentication for it. To pin a
-version, name the tag and its archive: `gh release download V0.1.1 -R
-ulaskizilay/sweep -p 'sweep-0.1.1-*' -p SHA256SUMS`. Or fetch both files from
-`https://github.com/ulaskizilay/sweep/releases/download/V0.1.1/` with any HTTP
+version, name the tag and its archive: `gh release download V0.1.2 -R
+ulaskizilay/sweep -p 'sweep-0.1.2-*' -p SHA256SUMS`. Or fetch both files from
+`https://github.com/ulaskizilay/sweep/releases/download/V0.1.2/` with any HTTP
 client.
 
-Two packages build from source in this repository. `sweep-cli-git` tracks `main`;
-`sweep-cli` builds the released tag:
+Two packages build from source in this repository. `sweep-cli` builds the
+released tag and is the one to install; `sweep-cli-git` tracks `main` and
+conflicts with it:
 
 ```bash
 git clone https://github.com/ulaskizilay/sweep.git
-cd sweep/packaging/sweep-cli-git    # or packaging/sweep-cli
+cd sweep/packaging/sweep-cli
 makepkg -si
 ```
 
@@ -385,9 +386,10 @@ cargo build --release --locked
 ./target/release/sweep doctor
 ```
 
-A stable `sweep-cli` package needs the tag's source tarball checksum and
-`updpkgsums`; [`packaging/README.md`](packaging/README.md) lists what it takes,
-and why that package is not faked here.
+Both packages install the same binary the repository builds: `sweep-cli` pins
+the tag's source tarball and its checksum, so a version number names one commit.
+[`packaging/README.md`](packaging/README.md) covers the release step and the
+fakeroot trap that shapes both `PKGBUILD`s.
 
 ### Completions and the man page
 

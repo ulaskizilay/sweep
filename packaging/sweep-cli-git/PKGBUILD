@@ -14,7 +14,7 @@ pkgname=sweep-cli-git
 # valid version string, and it used to look like a real build (`r20.2739763`)
 # long after that was true; a placeholder that cannot be mistaken for one is
 # better than a number that is simply stale.
-pkgver=r0.g0000000
+pkgver=r84.91c25dc
 pkgrel=1
 pkgdesc='Terminal cleanup and maintenance for Arch Linux'
 arch=('x86_64' 'aarch64')
@@ -43,32 +43,20 @@ prepare() {
 build() {
   cd "$pkgname"
   cargo build --release --locked --offline
-}
-
-check() {
-  cd "$pkgname"
-  cargo test --release --locked --offline
-}
-
-package() {
-  cd "$pkgname"
-
-  install -Dm755 target/release/sweep "$pkgdir/usr/bin/sweep"
-  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 
   # Completions and the man pages come from the same `clap` definition the parser
-  # uses, so an option cannot exist in `--help` and be missing here.
-  install -d "$pkgdir/usr/share/bash-completion/completions"
-  install -d "$pkgdir/usr/share/zsh/site-functions"
-  install -d "$pkgdir/usr/share/fish/vendor_completions.d"
-  install -d "$pkgdir/usr/share/man/man1"
-
+  # uses, so an option cannot exist in `--help` and be missing here. They are
+  # generated here, as your normal user, and installed as files further down.
+  # `package()` runs under fakeroot, where `geteuid()` answers 0, and sweep
+  # refuses to run as root on purpose: calling the binary from there turns that
+  # guard into a build failure instead of an install.
+  mkdir -p gen/man gen/bash-completion gen/zsh gen/fish
   target/release/sweep completions bash \
-    > "$pkgdir/usr/share/bash-completion/completions/sweep"
+    > gen/bash-completion/sweep
   target/release/sweep completions zsh \
-    > "$pkgdir/usr/share/zsh/site-functions/_sweep"
+    > gen/zsh/_sweep
   target/release/sweep completions fish \
-    > "$pkgdir/usr/share/fish/vendor_completions.d/sweep.fish"
+    > gen/fish/sweep.fish
 
   # One page per command: the top page names its subcommands as
   # `sweep-clean(1)`, and a name without a page behind it is a dead end for
@@ -77,7 +65,7 @@ package() {
   man_page() {
     local page=$1
     shift
-    target/release/sweep __manpage "$@" > "$pkgdir/usr/share/man/man1/$page.1"
+    target/release/sweep __manpage "$@" > "gen/man/$page.1"
   }
 
   man_page sweep
@@ -95,10 +83,30 @@ package() {
   man_page sweep-analyze analyze
   man_page sweep-aur aur
   man_page sweep-completions completions
+}
 
-  chmod 644 \
-    "$pkgdir/usr/share/bash-completion/completions/sweep" \
-    "$pkgdir/usr/share/zsh/site-functions/_sweep" \
-    "$pkgdir/usr/share/fish/vendor_completions.d/sweep.fish" \
-    "$pkgdir"/usr/share/man/man1/*.1
+check() {
+  cd "$pkgname"
+  # The suite runs here, before the fakeroot step: it proves the tree that was
+  # just built, and `cargo test --offline` fails rather than fetching a crate the
+  # lock file does not already name.
+  cargo test --release --locked --offline
+}
+
+package() {
+  cd "$pkgname"
+
+  install -Dm755 target/release/sweep "$pkgdir/usr/bin/sweep"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+  install -Dm644 gen/bash-completion/sweep \
+    "$pkgdir/usr/share/bash-completion/completions/sweep"
+  install -Dm644 gen/zsh/_sweep \
+    "$pkgdir/usr/share/zsh/site-functions/_sweep"
+  install -Dm644 gen/fish/sweep.fish \
+    "$pkgdir/usr/share/fish/vendor_completions.d/sweep.fish"
+
+  for page in gen/man/*.1; do
+    install -Dm644 "$page" "$pkgdir/usr/share/man/man1/$(basename "$page")"
+  done
 }
