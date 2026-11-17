@@ -2,7 +2,9 @@
 
 **Status:** the report-only `status` row is implemented. No rule kind exists and
 no deletion path changes: `if-missing-owner` and the `pkg:` requirement are still
-refused at load, as `docs/RULES.md` says.
+refused at load, as `docs/RULES.md` says. Deletion was **declined** on
+17 November 2026; the counterexample is in
+[the decision below](#decision-17-november-2026-no-deletion-rule).
 
 ## The question
 
@@ -118,6 +120,50 @@ known false-positive shape: Cursor is installed, but the directory name does not
 match the `cursor` command. A report-only row can afford that; a deletion rule
 could not.
 
+## Decision (17 November 2026): no deletion rule
+
+Orphan-cache deletion is **declined**. The `status` row stays a report, and the
+seven-point contract above stays a contract rather than an implementation plan.
+
+The probe was run again on this date — 99 directories of at least 1 MiB — and it
+produced the counterexample the contract was missing:
+
+| Directory | Size | `exec` | `pkg` | `flatpak` | `bin` | rule |
+|---|---|---|---|---|---|---|
+| `~/.cache/ms-playwright` | 1.6 GiB | — | — | — | — | — |
+| `~/.cache/transcribe-venv` | 7.2 GiB | — | — | — | — | — |
+| `~/.cache/huggingface` | 7.0 GiB | — | — | — | — | `model-caches` (disabled) |
+| `~/.cache/tracker3` | 415 MiB | — | — | — | — | — |
+
+`~/.cache/ms-playwright` is **installed software**. It holds the browser builds
+Playwright downloaded and launches by absolute path out of its own manifest, so
+it has no desktop entry, no command on `PATH` and no pacman package. Every
+evidence source this contract allows says "no owner", and the directory is not
+disposable: deleting it breaks every Playwright test on the machine until
+`playwright install` runs again. A rule built on the four absences would delete
+it, and the sentence in the preview ("no application owns this") would be true
+and irrelevant.
+
+That is not a gap in the checks, it is the shape of the question. Absence of
+ownership evidence is what a *library* cache looks like, and the contract's own
+rule 4 says a library cache needs a named rule. `ms-playwright` has one job and
+no owner record; the same is true of `transcribe-venv`, which is a virtualenv a
+script made and a person may still call. The measured surface is 7.2 GiB of
+directories whose only defect is that nothing claims them, and the first false
+positive costs more than the whole reclaim.
+
+What would make this worth revisiting is a **positive** owner signal, not a
+missing one: a cache that a package database entry or an installed-app record
+names, where removal is the uninstall of something the user already decided to
+remove. That is `uninstall`'s contract, which already moves exact-name leftovers
+to the Trash after pacman succeeds. Reversal threshold for the record: the row
+may become a plan only when a candidate can be attributed to an installed owner
+by a source other than the absence of the other four.
+
+The row itself is unchanged and still earns its place: it is the one place that
+answers "what is this 7 GiB directory and why does nothing touch it", and it
+deletes nothing.
+
 ## Why not reuse `if-missing-owner`
 
 The loader refuses it because the engine does not read the package database.
@@ -126,11 +172,17 @@ plan time, which adds external commands to the scan path and a new failure
 mode. That is a larger change than a rule kind, and the report-only data
 should justify it first.
 
-## Open questions
+## Open questions (parked with the decision)
+
+These were open while deletion was on the table. With the decision above they are
+answered by not building the rule, and they stay listed so a future attempt starts
+from them instead of rediscovering them:
 
 - Does the shared-directory allowlist belong in the catalog (`exclude`) or in
   code?
 - The row is a summary, and `scripts/probe_orphan_data.py` prints one line per
   directory for anyone who needs the list. A per-directory `status` row would
   turn a health screen into a report.
-- Is there a signal for "shared" that is not a hardcoded list?
+- Is there a signal for "shared" that is not a hardcoded list? The counterexample
+  suggests the more useful question is the opposite one: is there a signal for
+  "owned" that is not a hardcoded list.
