@@ -1667,7 +1667,7 @@ dependencies = [
 
 [[package]]
 name = "sweep"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "clap_complete",
@@ -1685,7 +1685,7 @@ dependencies = [
 
 [[package]]
 name = "sweep-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "libc",
  "proptest",
@@ -1699,7 +1699,7 @@ dependencies = [
 
 [[package]]
 name = "sweep-testkit"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "libc",
  "sweep-core",

@@ -361,19 +361,18 @@ tar -xzf sweep-*-x86_64-linux.tar.gz
 install -m755 sweep-*/bin/sweep ~/.local/bin/
 ```
 
-`gh release download` needs an authenticated `gh` because the repository is
-private; the archive itself does not. To pin a version, name the tag and its
-archive: `gh release download V0.1.1 -R ulaskizilay/sweep -p 'sweep-0.1.1-*' -p
-SHA256SUMS`. Or fetch both files from
+The repository is public, so `gh` needs no authentication for it. To pin a
+version, name the tag and its archive: `gh release download V0.1.1 -R
+ulaskizilay/sweep -p 'sweep-0.1.1-*' -p SHA256SUMS`. Or fetch both files from
 `https://github.com/ulaskizilay/sweep/releases/download/V0.1.1/` with any HTTP
-client that can authenticate.
+client.
 
-The tracking package builds `main`, and it lives in this repository until it is
-submitted to the AUR:
+Two packages build from source in this repository. `sweep-cli-git` tracks `main`;
+`sweep-cli` builds the released tag:
 
 ```bash
 git clone https://github.com/ulaskizilay/sweep.git
-cd sweep/packaging/sweep-cli-git
+cd sweep/packaging/sweep-cli-git    # or packaging/sweep-cli
 makepkg -si
 ```
 
