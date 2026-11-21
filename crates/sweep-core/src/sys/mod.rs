@@ -247,14 +247,27 @@ pub fn unlink_beneath(dirfd: &OwnedFd, name: &OsStr, is_dir: bool) -> io::Result
     }
 }
 
-/// Renames one entry between two already-open directories.
+/// Renames one entry between two already-open directories, never replacing.
 ///
 /// Both handles were opened without following a symbolic link, and both names
 /// are single components, so the move cannot be redirected through an ancestor
-/// that changed between the decision and the call. `renameat` also refuses to
-/// cross a filesystem, which is the honest answer for a move into a trash
-/// directory on another mount: copying and deleting would turn a recoverable
-/// move into a slow, half-finished one.
+/// that changed between the decision and the call. The call also refuses to
+/// cross a filesystem, which is the honest answer for an entry whose own mount
+/// offers no trash directory: copying and deleting would turn a recoverable move
+/// into a slow, half-finished one.
+///
+/// `RENAME_NOREPLACE` rather than a plain `renameat`, because every caller has
+/// just searched for a free name. A plain rename would silently replace whatever
+/// arrived under that name in the meantime — another sweep, a file manager
+/// emptying its own trash — and the replaced payload would be gone while its
+/// `.trashinfo` record still described it. With the flag the race is an
+/// `EEXIST` the caller can answer by looking for the next free name.
+///
+/// A kernel that predates 3.15 answers `ENOSYS`, and a filesystem that does not
+/// implement the flag answers `EINVAL`; both fall back to a plain `renameat`,
+/// which is the only move those systems can make. That fallback carries the
+/// check-then-rename window the flag closes, and it is recorded as a residual
+/// risk in `docs/SAFETY.md`.
 pub fn rename_beneath(
     from_dir: &OwnedFd,
     from: &OsStr,
@@ -268,17 +281,36 @@ pub fn rename_beneath(
     // SAFETY: both descriptors are live directory handles and both names are
     // valid NUL-terminated single components with no separator.
     let rc = unsafe {
-        libc::renameat(
+        libc::renameat2(
             from_dir.as_raw_fd(),
             c_from.as_ptr(),
             to_dir.as_raw_fd(),
             c_to.as_ptr(),
+            libc::RENAME_NOREPLACE,
         )
     };
     if rc == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(libc::ENOSYS) | Some(libc::EINVAL) => {
+            // SAFETY: the same live handles and the same two names as above.
+            let rc = unsafe {
+                libc::renameat(
+                    from_dir.as_raw_fd(),
+                    c_from.as_ptr(),
+                    to_dir.as_raw_fd(),
+                    c_to.as_ptr(),
+                )
+            };
+            if rc == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        }
+        _ => Err(error),
     }
 }
 
@@ -552,6 +584,38 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    #[test]
+    fn a_move_never_replaces_a_name_that_appeared_under_it() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let from_dir = temp.path().join("from");
+        let to_dir = temp.path().join("to");
+        std::fs::create_dir_all(&from_dir).expect("mkdir");
+        std::fs::create_dir_all(&to_dir).expect("mkdir");
+        std::fs::write(from_dir.join("notes.txt"), b"mine").expect("write");
+        std::fs::write(to_dir.join("notes.txt"), b"theirs").expect("write");
+
+        let from = open_dir_nofollow(&from_dir).expect("handle");
+        let to = open_dir_nofollow(&to_dir).expect("handle");
+        let error = rename_beneath(&from, OsStr::new("notes.txt"), &to, OsStr::new("notes.txt"))
+            .expect_err("the name is taken");
+
+        assert_eq!(
+            error.raw_os_error(),
+            Some(libc::EEXIST),
+            "the refusal is the one the caller retries on, not a silent replace"
+        );
+        assert_eq!(
+            std::fs::read(from_dir.join("notes.txt")).expect("source"),
+            b"mine",
+            "the entry that was being moved is still where it was"
+        );
+        assert_eq!(
+            std::fs::read(to_dir.join("notes.txt")).expect("destination"),
+            b"theirs",
+            "the payload that arrived first is untouched"
+        );
     }
 
     #[test]

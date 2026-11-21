@@ -300,8 +300,9 @@ apart.
 ### A move writes its record after both handles are open
 
 The trash is the one sink that moves instead of unlinking. `Trash::send` opens
-the source's parent and `Trash/files` with those same no-symlink handles, and
-only then writes the `.trashinfo` record and renames. Opening a directory can
+the source's parent and the destination's `files` directory — the home trash's or
+the entry's own mount's — with those same no-symlink handles, and only then
+writes the `.trashinfo` record and renames. Opening a directory can
 refuse but can never move anything, so doing it first means a refusal — a
 symlinked ancestor, a permission denial — leaves the trash untouched instead of
 a record offering to restore a payload that was never sent. A record whose
@@ -315,6 +316,23 @@ entry in all of them. Pinned by
 not when `exists()` says so: a dangling link is invisible to `exists()`, but
 `renameat` onto it would replace the entry instead of placing the payload beside
 it. Pinned by `a_dangling_link_in_the_trash_still_occupies_its_name`.
+
+### The move refuses a name that appeared under it
+
+Searching for a free name and moving onto it are two steps, so the name can be
+taken in between by another sweep, a file manager emptying its own trash, or the
+same command in another terminal. A plain `renameat` would replace whatever
+arrived there, which deletes that process's payload while its `.trashinfo`
+record still describes it — data lost inside the one directory the user was
+told is recoverable.
+
+The move uses `RENAME_NOREPLACE`, so that race is `EEXIST`, and the caller
+removes the record it had just written and looks for the next free name, up to
+eight times before refusing with nothing moved. The names tried are still
+`name`, `name.1`, `name.2`, so a restore reads the same shape it always did.
+Pinned by `a_move_never_replaces_a_name_that_appeared_under_it`, and the
+check-then-rename window that remains where the flag is unavailable is residual
+risk R13.
 
 ### A top-directory trash is borrowed, never invented
 
@@ -771,6 +789,27 @@ the re-read and the unlink can still lose the release that just became current.
 Closing it completely needs the installer to cooperate — a lock it takes while
 it swaps the link — which no third-party tool offers, so this stays a stated
 risk rather than a solved one.
+
+### R13. A filesystem without `RENAME_NOREPLACE` reopens the name race
+
+A move searches the trash for a free name and then renames onto it, and the two
+steps cannot be one operation. `RENAME_NOREPLACE` closes the window: if anything
+arrived under that name in between, the move answers `EEXIST` and the caller
+looks for the next free name, so neither side loses a payload.
+
+*What limits it:* a kernel older than 3.15 answers `ENOSYS` and a filesystem
+that does not implement the flag answers `EINVAL`; both fall back to a plain
+`renameat`, which silently replaces the entry that arrived first. Every
+filesystem sweep is likely to meet — ext4, btrfs, xfs, tmpfs — implements the
+flag, and the fallback exists so that an exotic mount can still receive a
+trashed entry instead of refusing every move and losing the whole explorer
+feature there.
+
+*What remains:* on such a filesystem, a second process writing the same name into
+the same trash during the same instant can still lose its payload. That is the
+behaviour every plain-rename implementation has, it requires a concurrent writer
+and a name collision, and it never touches a file outside the two trash
+directories.
 
 ---
 

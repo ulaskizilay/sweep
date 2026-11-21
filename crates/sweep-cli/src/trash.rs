@@ -35,8 +35,10 @@
 //!   a `.Trash`, `.Trash/<uid>`, `.Trash-<uid>` or `files/` that is a symbolic
 //!   link is refused rather than followed.
 //!
-//! Nothing here unlinks anything except a `.trashinfo` file written a moment
-//! earlier when the move that followed it failed.
+//! Nothing here unlinks anything except a `.trashinfo` record written a moment
+//! earlier by this same move, whose payload did not follow it: the record is
+//! removed when the rename fails, and when the name was taken in between the
+//! move retries with the next free name.
 //!
 //! Emptying a per-mount trash is not part of this: `sweep clean` empties the home
 //! trash, and a removable disk's trash belongs to whichever session filled it.
@@ -193,9 +195,6 @@ impl Trash {
             return Err(Refusal::TheTrashItself);
         }
 
-        let (candidate, info_path) = free_name(&destination.files, &destination.info, name)
-            .ok_or_else(|| Refusal::Other("no free name in the trash".to_string()))?;
-
         // Both handles first. The record still precedes the move: a payload
         // without a record would be invisible to every restore tool, while a
         // record whose move then failed is removed below.
@@ -204,28 +203,66 @@ impl Trash {
             sys::OpenDirError::Io(io) => map_io(&io, &destination.files),
         })?;
 
-        write_info(&info_path, path)?;
+        // The name search and the move cannot be one operation, so the move
+        // refuses a destination that appeared in between (`RENAME_NOREPLACE`).
+        // Answering that with the next free name keeps a second process writing
+        // into the same trash from costing either side a payload.
+        let mut attempts = 0;
+        loop {
+            let (candidate, info_path) = free_name(&destination.files, &destination.info, name)
+                .ok_or_else(|| Refusal::Other("no free name in the trash".to_string()))?;
 
-        match sys::rename_beneath(&from_dir, name, &to_dir, &candidate) {
-            Ok(()) => Ok(Moved {
-                from: path.to_path_buf(),
-                to: destination.files.join(&candidate),
-            }),
-            Err(error) => {
-                // The record is ours and was written seconds ago; leaving it
-                // behind would show a restore entry with no payload.
-                let _ = std::fs::remove_file(&info_path);
-                Err(match error.raw_os_error() {
-                    Some(libc::EXDEV) => Refusal::CrossDevice(
-                        device_of(parent).unwrap_or_else(|| "another mount".to_string()),
-                    ),
-                    Some(libc::EBUSY) => Refusal::Mounted,
-                    Some(libc::ENOENT) => Refusal::Gone,
-                    Some(libc::EACCES) | Some(libc::EPERM) => Refusal::Permission(
-                        "the directory or the trash refuses the move".to_string(),
-                    ),
-                    _ => Refusal::Other(error.to_string()),
-                })
+            // A record another process wrote first belongs to it: the name is
+            // taken, and answering that with the next free name is the same
+            // retry the move itself asks for.
+            if let Err(error) = write_info(&info_path, path) {
+                if error.kind() == io::ErrorKind::AlreadyExists {
+                    attempts += 1;
+                    if attempts >= 8 {
+                        return Err(Refusal::Other(format!(
+                            "{} kept being taken in the trash; nothing was moved",
+                            destination.files.display()
+                        )));
+                    }
+                    continue;
+                }
+                return Err(map_io(&error, &info_path));
+            }
+
+            match sys::rename_beneath(&from_dir, name, &to_dir, &candidate) {
+                Ok(()) => {
+                    return Ok(Moved {
+                        from: path.to_path_buf(),
+                        to: destination.files.join(&candidate),
+                    })
+                }
+                Err(error) if error.raw_os_error() == Some(libc::EEXIST) => {
+                    // The record is ours and names a name we did not take.
+                    let _ = std::fs::remove_file(&info_path);
+                    attempts += 1;
+                    if attempts >= 8 {
+                        return Err(Refusal::Other(format!(
+                            "{} kept being taken in the trash; nothing was moved",
+                            destination.files.display()
+                        )));
+                    }
+                }
+                Err(error) => {
+                    // The record is ours and was written seconds ago; leaving it
+                    // behind would show a restore entry with no payload.
+                    let _ = std::fs::remove_file(&info_path);
+                    return Err(match error.raw_os_error() {
+                        Some(libc::EXDEV) => Refusal::CrossDevice(
+                            device_of(parent).unwrap_or_else(|| "another mount".to_string()),
+                        ),
+                        Some(libc::EBUSY) => Refusal::Mounted,
+                        Some(libc::ENOENT) => Refusal::Gone,
+                        Some(libc::EACCES) | Some(libc::EPERM) => Refusal::Permission(
+                            "the directory or the trash refuses the move".to_string(),
+                        ),
+                        _ => Refusal::Other(error.to_string()),
+                    });
+                }
             }
         }
     }
@@ -466,21 +503,18 @@ fn device_of(path: &Path) -> Option<String> {
     Some(format!("device {}", meta.dev()))
 }
 
-fn write_info(info_path: &Path, original: &Path) -> Result<(), Refusal> {
+fn write_info(info_path: &Path, original: &Path) -> io::Result<()> {
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(info_path)
-        .map_err(|error| map_io(&error, info_path))?;
+        .open(info_path)?;
     let body = format!(
         "[Trash Info]\nPath={}\nDeletionDate={}\n",
         encode_path(original),
         sys::local_timestamp()
     );
-    file.write_all(body.as_bytes())
-        .map_err(|error| Refusal::Other(error.to_string()))?;
+    file.write_all(body.as_bytes())?;
     file.flush()
-        .map_err(|error| Refusal::Other(error.to_string()))
 }
 
 /// Percent-encodes a path the way the trash specification expects.
