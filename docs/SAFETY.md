@@ -311,10 +311,43 @@ entry in all of them. Pinned by
 `a_symlinked_ancestor_refuses_rather_than_redirecting` and
 `a_missing_entry_is_gone_not_an_empty_trash_entry`.
 
-`Trash::available` treats a name as taken when *any* directory entry carries it,
+`free_name` treats a name as taken when *any* directory entry carries it,
 not when `exists()` says so: a dangling link is invisible to `exists()`, but
 `renameat` onto it would replace the entry instead of placing the payload beside
 it. Pinned by `a_dangling_link_in_the_trash_still_occupies_its_name`.
+
+### A top-directory trash is borrowed, never invented
+
+`renameat` cannot cross a mount, so an entry on another filesystem is moved into
+that mount's own trash. Which directory that is follows the specification, and
+every way it can be wrong is a refusal:
+
+- `<mount>/.Trash` must be a real directory with the sticky bit. Without the bit,
+  one user could rename another user's directory inside it, so it is not used.
+- `<mount>/.Trash/<uid>` is created only inside such a shared directory, mode
+  `0700`, and an existing one must be a directory this user owns.
+- `<mount>/.Trash-<uid>` is used when it exists, must be owned by this user, and
+  is **never created**: a directory in a mount's root belongs to whoever
+  administers the mount.
+- None of those four names may be a symbolic link. `symlink_metadata` decides, and
+  the handle is opened with the same no-symlink flags as every other move, so a
+  link cannot redirect the payload.
+- A path inside `.Trash` or `.Trash-<uid>` is refused by name, because trashing a
+  trashed payload would strand it somewhere no restore tool looks.
+
+When no directory qualifies the refusal names the exact one to create
+(`<mount>/.Trash-<uid>`, owned by the user, mode `0700`) instead of copying and
+deleting, which would turn a recoverable move into an operation that can be
+interrupted halfway. The mount is found through the same `/proc/self/mountinfo`
+table `doctor` prints, and the comparison is a mount-point comparison rather than
+a device comparison because a btrfs subvolume carries an anonymous `st_dev` that
+mountinfo never mentions. Pinned by
+`an_entry_on_another_mount_lands_in_that_mounts_trash`,
+`a_mount_without_a_trash_directory_refuses_and_names_the_one_to_create`,
+`a_shared_trash_without_the_sticky_bit_is_refused`,
+`a_shared_trash_directory_owned_by_another_user_is_refused`,
+`a_symlinked_trash_directory_is_refused_rather_than_followed` and
+`a_path_inside_a_trash_directory_is_never_trashed_again`.
 
 ---
 

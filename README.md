@@ -474,7 +474,10 @@ because a health summary that cannot be acted on is a dashboard. Trash appears
 with its size, and `clean` empties it as part of the same plan: each payload goes
 with the `.trashinfo` record that names it, so nothing is left offering a restore
 that cannot work. `analyze` and `uninstall` are what put entries there in the
-first place, which is what keeps that step reviewable.
+first place, which is what keeps that step reviewable. That row and that step
+cover the home trash; a per-mount trash that `analyze` filled on another
+filesystem is left alone, because emptying a removable disk's trash can remove
+what another session put there.
 
 One row reads configuration rather than counters. `user units` checks whether
 the program each `~/.config/systemd/user/*.service` starts still exists: a unit
@@ -502,18 +505,27 @@ says `at least N items` rather than printing a short total as if it were whole.
 `sweep analyze` without arguments opens a full-screen explorer over `$HOME`, or
 over the directory you name. It reads sizes, sorts by size, name or age, filters
 by name, and descends into a directory. It writes nothing until you press `d` and
-then `y`, and that pair moves the selected entry to the freedesktop trash in
-`$XDG_DATA_HOME/Trash` — `files/` for the payload, `info/` for the record that
-lets your desktop restore it. Every move appends one `TRASHED` row to the
-operation log.
+then `y`, and that pair moves the selected entry to a freedesktop trash — `files/`
+for the payload, `info/` for the record that lets your desktop restore it. Every
+move appends one `TRASHED` row to the operation log.
+
+Which trash depends on the filesystem, because `renameat(2)` cannot cross a mount:
+an entry on the home filesystem goes to `$XDG_DATA_HOME/Trash`, and an entry on
+another mount goes to that mount's own top-directory trash. sweep uses
+`<mount>/.Trash/<uid>` when the administrator made `<mount>/.Trash` sticky — it
+creates its own `<uid>` directory inside it, mode `0700` — and otherwise
+`<mount>/.Trash-<uid>` if that exists. It never creates `<mount>/.Trash-<uid>`,
+because a directory in a mount's root belongs to whoever administers the mount;
+a missing one is a refusal that names the exact directory to create. Copying the
+tree instead is not an option: that turns one recoverable move into a slow
+operation that can be interrupted halfway.
 
 The same path policy as every other command applies: protected roots, `~/.ssh`,
-keyrings, the state directory and the trash itself are refused, and so is a path
-with a symbolic link anywhere above it. A link is moved as a link; what it points
-at is never touched. `renameat(2)` refuses to cross a filesystem, so an entry on
-another mount is a refusal rather than a copy that can be interrupted halfway:
-sweep does not yet implement the per-mount top directory trash that would make it
-work, and saying so is better than half a move.
+keyrings, the state directory and any trash directory are refused, and so is a
+path with a symbolic link anywhere above it. A link is moved as a link; what it
+points at is never touched. A `.Trash`, `.Trash/<uid>`, `.Trash-<uid>` or `files/`
+that is itself a symbolic link is refused rather than followed, and a shared
+`.Trash` without the sticky bit is not used.
 
 `--largest` is the mode for a pipe, a script or a machine without a terminal:
 

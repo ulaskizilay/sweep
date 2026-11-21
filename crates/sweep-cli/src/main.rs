@@ -232,12 +232,6 @@ enum RulesCommand {
     Verify,
 }
 
-/// Exit code for a command that exists but is not implemented in this build.
-///
-/// Held for the commands the later milestones wire up; nothing returns it today.
-#[allow(dead_code)]
-pub(crate) const EXIT_NOT_IMPLEMENTED: u8 = 4;
-
 /// Exit code for a rule catalog that failed to load.
 pub(crate) const EXIT_INVALID_RULES: u8 = 3;
 

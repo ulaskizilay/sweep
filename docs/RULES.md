@@ -501,7 +501,6 @@ sweep clean --yes --privileged   # also sweep root-owned system caches
 | 1 | an applied run hit a syscall failure (the log has the reason per item), the report could not be serialised, or `--privileged` could not elevate |
 | 2 | usage error: unknown command, flag or section |
 | 3 | the catalog did not compile; the reason is printed, and `--json` carries it |
-| 4 | reserved for commands a later milestone wires up |
 | 5 | the run was not confirmed; nothing was deleted and nothing was recorded |
 | 78 | this environment cannot run sweep (`$HOME` is not usable, the process is root, or `__apply` was invoked by a non-root user) |
 

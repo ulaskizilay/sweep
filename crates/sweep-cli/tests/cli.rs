@@ -2733,6 +2733,122 @@ fn project_home() -> tempfile::TempDir {
     home
 }
 
+/// `purge` prints the same plan document `clean` does, and this is what says so.
+///
+/// The report is a machine contract: a script reads `totals`, `rules` and
+/// `plan_hash`, so a renamed key is a broken caller even though the text mode
+/// still looks right. `clean` and the other commands had a shape test; `purge`
+/// printed JSON that nothing pinned.
+#[test]
+fn purge_dry_run_json_is_one_document_with_the_plan_shape() {
+    let home = project_home();
+    let first = run_in(home.path(), &["purge", "--dry-run", "--json"]);
+    let second = run_in(home.path(), &["purge", "--dry-run", "--json"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+
+    let first: serde_json::Value = serde_json::from_str(&first.stdout).expect("one document");
+    let second: serde_json::Value = serde_json::from_str(&second.stdout).expect("one document");
+
+    assert_eq!(first["command"], "purge", "the document names its command");
+    assert_eq!(first["mode"], "dry-run");
+    assert_eq!(
+        first["elevation"],
+        serde_json::Value::Null,
+        "purge never elevates"
+    );
+    assert_eq!(
+        first["log"],
+        serde_json::Value::Null,
+        "a dry run writes no log"
+    );
+    assert!(
+        first["refusals"].is_array(),
+        "refusals is present and empty rather than absent: {first}"
+    );
+    assert!(
+        first["totals"]["items"].as_u64().unwrap_or(0) > 0,
+        "the fixture must plan something: {first}"
+    );
+    assert!(
+        first["totals"]["bytes"].as_u64().unwrap_or(0) > 0,
+        "the fixture must plan bytes: {first}"
+    );
+    let hash = first["plan_hash"].as_str().expect("plan_hash");
+    assert_eq!(hash.len(), 16, "the hash is 64 bits, hex encoded: {hash}");
+    assert_eq!(
+        first["plan_hash"], second["plan_hash"],
+        "the same tree must produce the same plan identity"
+    );
+    let rules = first["rules"].as_array().expect("rules");
+    assert!(!rules.is_empty(), "the per-rule section is the point");
+    for rule in rules {
+        assert!(rule["id"].is_string(), "a rule row names its id: {rule}");
+        assert!(
+            rule["items"].is_number(),
+            "a rule row counts its items: {rule}"
+        );
+    }
+}
+
+#[test]
+fn optimize_json_is_one_document_with_its_own_shape() {
+    let (home, bin) = optimize_home();
+    stub(&bin, "fc-cache");
+
+    let before = snapshot(home.path());
+    let output = run_with_path(home.path(), &bin, &["optimize", "--dry-run", "--json"]);
+    assert_eq!(output.code, Some(0), "stderr: {}", output.stderr);
+
+    // `optimize` does not share the plan document: it reports outcomes, because
+    // its tasks change the machine instead of deleting a planned set.
+    let report: serde_json::Value = serde_json::from_str(&output.stdout).expect("one document");
+    assert_eq!(report["dry_run"], true);
+    assert_eq!(report["version"], env!("CARGO_PKG_VERSION"));
+    let stamp = report["generated_at"].as_str().expect("generated_at");
+    assert_eq!(stamp.len(), 20, "RFC 3339 to the second: {stamp}");
+
+    let outcomes = report["outcomes"].as_array().expect("outcomes");
+    assert!(!outcomes.is_empty(), "every task gets an outcome");
+    for outcome in outcomes {
+        assert!(
+            outcome["id"].is_string(),
+            "an outcome names its task: {outcome}"
+        );
+        assert!(outcome["title"].is_string(), "...and its title: {outcome}");
+        assert!(
+            outcome["state"].is_string(),
+            "the state is a word, not a number: {outcome}"
+        );
+        assert!(
+            outcome["seconds"].is_number(),
+            "the timing is present even in a dry run: {outcome}"
+        );
+    }
+    assert!(
+        outcomes.iter().any(|outcome| outcome["state"] == "planned"),
+        "the stub and the cache directory must schedule at least one task: {report}"
+    );
+    assert_eq!(
+        before,
+        snapshot(home.path()),
+        "a dry run must not run a task or write anything below HOME"
+    );
+
+    let applied = run_with_path(home.path(), &bin, &["optimize", "--yes", "--json"]);
+    assert_eq!(applied.code, Some(0), "stderr: {}", applied.stderr);
+    let applied: serde_json::Value = serde_json::from_str(&applied.stdout).expect("one document");
+    assert_eq!(applied["dry_run"], false);
+    assert!(
+        applied["outcomes"]
+            .as_array()
+            .expect("outcomes")
+            .iter()
+            .any(|outcome| outcome["state"] == "ok"),
+        "an applied run reports what it did: {applied}"
+    );
+}
+
 #[test]
 fn purge_requires_the_manifests_it_removes_around() {
     let home = project_home();
