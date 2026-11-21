@@ -105,8 +105,8 @@ silently cleans nothing on a large fraction of machines. The resolved physical
 path is re-tested against the same list, deny-only, and the delete happens
 through a directory handle opened with `RESOLVE_NO_SYMLINKS`.
 
-The full contract — including the twelve residual risks that are *not* solved —
-is in [`docs/SAFETY.md`](docs/SAFETY.md).
+The full contract — including the thirteen residual risks that are *not*
+solved — is in [`docs/SAFETY.md`](docs/SAFETY.md).
 
 ## The rules
 
