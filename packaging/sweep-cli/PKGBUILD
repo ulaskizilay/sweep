@@ -10,7 +10,9 @@
 # the package compares against. GitHub has regenerated archive files before, so
 # if the build ever answers "One or more files did not pass the validity check",
 # re-run `updpkgsums` and treat the new hash as a deliberate change, not a local
-# corruption.
+# corruption. The repository is private, so fetching that tarball needs the same
+# credentials a clone does; `makepkg` uses the configured git credentials or a
+# `~/.netrc` entry, and an anonymous request gets a 404.
 #
 # The rejected alternative was to package the release archive
 # (`sweep-<ver>-x86_64-linux.tar.gz`) instead: its checksum is uploaded once and
