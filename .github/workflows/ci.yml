@@ -178,6 +178,58 @@ jobs:
           sudo umount /mnt/btrfs || true
           rm -f /tmp/btrfs.img
 
+  # Both `packaging/*/PKGBUILD` files list aarch64, and until this job existed
+  # every gate compiled x86_64 only, so the second architecture was a claim with
+  # nothing behind it. Three steps answer three different questions: `check`
+  # proves the aarch64 `cfg` branches type-check, the linked build proves a GNU
+  # arm64 toolchain can produce the binary, and running it under qemu proves the
+  # result starts instead of dying in a bad relocation.
+  aarch64:
+    name: build (aarch64)
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install base packages
+        run: >-
+          pacman -Sy --noconfirm --needed
+          base-devel git rustup file qemu-user
+          aarch64-linux-gnu-gcc aarch64-linux-gnu-glibc
+
+      - uses: actions/checkout@v4
+
+      - name: Install stable and the target
+        env:
+          RUSTUP_HOME: /opt/rustup
+          CARGO_HOME: /opt/cargo
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-unknown-linux-gnu
+          ln -sf /opt/cargo/bin/* /usr/local/bin/
+
+      - name: Type-check every target of the workspace for aarch64
+        env:
+          RUSTUP_HOME: /opt/rustup
+          CARGO_HOME: /opt/cargo
+        run: cargo check --workspace --all-targets --target aarch64-unknown-linux-gnu
+
+      - name: Cross-build the binary
+        env:
+          RUSTUP_HOME: /opt/rustup
+          CARGO_HOME: /opt/cargo
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --workspace --target aarch64-unknown-linux-gnu
+
+      - name: The artifact really is an arm64 binary
+        run: |
+          file target/aarch64-unknown-linux-gnu/debug/sweep | tee /tmp/artifact
+          grep -q 'ARM aarch64' /tmp/artifact
+
+      - name: The arm64 binary starts under qemu
+        run: |
+          qemu-aarch64 -L /usr/aarch64-linux-gnu \
+            ./target/aarch64-unknown-linux-gnu/debug/sweep --version
+
   # libFuzzer needs nightly, so it stays out of the merge gate: a flaky runner
   # must not block a pull request. It still runs per push.
   #
