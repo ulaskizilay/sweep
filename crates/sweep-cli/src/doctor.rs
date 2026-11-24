@@ -131,17 +131,32 @@ fn gather() -> Result<Report, String> {
 /// `/.snapshots` would decorate all thirty mounts. Narrowing to the mount point
 /// keeps the column honest.
 fn snapshots_on(mount_point: &std::path::Path, facts: Option<&sweep_core::FsFacts>) -> Vec<String> {
-    facts
-        .map(|facts| {
-            facts
-                .snapshot_candidates
-                .iter()
-                .filter(|candidate| is_within(mount_point, candidate))
-                .filter(|candidate| candidate.exists())
-                .map(|candidate| candidate.display().to_string())
-                .collect()
-        })
-        .unwrap_or_default()
+    match facts {
+        Some(facts) => snapshots_in(mount_point, &facts.snapshot_candidates, |candidate| {
+            candidate.exists()
+        }),
+        None => Vec::new(),
+    }
+}
+
+/// The pure part of [`snapshots_on`]: the candidates under `mount_point` that
+/// exist.
+///
+/// `exists` is a parameter so a test can answer for the filesystem instead of
+/// reading the machine it happens to run on. A test that called
+/// `Path::exists` directly would pass or fail with whatever `/home/.snapshots`
+/// the host had created, which is not what the column is about.
+fn snapshots_in(
+    mount_point: &std::path::Path,
+    candidates: &[std::path::PathBuf],
+    exists: impl Fn(&std::path::Path) -> bool,
+) -> Vec<String> {
+    candidates
+        .iter()
+        .filter(|candidate| is_within(mount_point, candidate))
+        .filter(|candidate| exists(candidate))
+        .map(|candidate| candidate.display().to_string())
+        .collect()
 }
 
 fn state_dir_writable(xdg: &Xdg) -> bool {
@@ -304,16 +319,35 @@ mod tests {
         );
 
         // Display must not: one existing `/.snapshots` would otherwise decorate
-        // every mount in the table.
-        let shown = snapshots_on(Path::new("/home"), Some(&home));
-        assert!(
-            shown.is_empty(),
-            "a mount must not claim a snapshot directory outside itself: {shown:?}"
+        // every mount in the table. The existence answer is supplied by the test
+        // — every candidate "exists" — so the assertion is about which mount may
+        // claim a path, not about what the host filesystem holds.
+        let all_exist = |_: &Path| true;
+        let shown = snapshots_in(Path::new("/home"), &home.snapshot_candidates, all_exist);
+        assert_eq!(
+            shown,
+            vec![
+                "/home/.snapshots".to_string(),
+                "/home/@snapshots".to_string()
+            ],
+            "a mount claims its own snapshot names and nothing else"
         );
-        let shown = snapshots_on(Path::new("/srv"), Some(&home));
+        let shown = snapshots_in(Path::new("/srv"), &home.snapshot_candidates, all_exist);
         assert!(
             shown.is_empty(),
             "/srv must not claim /home's or the root's snapshots: {shown:?}"
+        );
+        let root = table.facts(Path::new("/")).expect("facts");
+        let shown = snapshots_in(Path::new("/"), &root.snapshot_candidates, all_exist);
+        assert_eq!(
+            shown,
+            vec![
+                "/.snapshots".to_string(),
+                "/@snapshots".to_string(),
+                "/timeshift".to_string(),
+                "/var/lib/timeshift".to_string()
+            ],
+            "the root mount keeps the global list: {shown:?}"
         );
     }
 }
