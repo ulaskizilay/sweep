@@ -165,6 +165,12 @@ PKGBUILDs has to change - `sweep-cli` already pins the tag archive's real
 checksum and `sweep-cli-git` carries `sha256sums = SKIP`, which is correct for a
 git source - so the step is the source URL, not the packaging.
 
+The repository stays private by the maintainer's decision (24 November 2026), so
+that is the condition an AUR package would need rather than a step on a roadmap.
+No release is cut for the same reason: a published asset could be downloaded only
+by an account with access, while the source in this tree builds the same binary
+for the person who owns it.
+
 Before the repository turned private, the submission was rehearsed and refused
 (`aur@aur.archlinux.org: Permission denied (publickey)`) because the local key is
 not registered with the AUR account. Neither `.SRCINFO` is hand-edited: both are
