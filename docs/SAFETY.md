@@ -367,6 +367,17 @@ mountinfo never mentions. Pinned by
 `a_symlinked_trash_directory_is_refused_rather_than_followed` and
 `a_path_inside_a_trash_directory_is_never_trashed_again`.
 
+Those tests build their mount table synthetically, so they prove the decision and
+not that the decision survives contact with a real mount. The happy path was
+measured on a machine whose `/var/tmp` is a separate btrfs subvolume: with no
+`/var/tmp/.Trash`, the explorer refused and named the directory to create; after
+`mkdir -m 1777 /var/tmp/.Trash`, the same keystroke moved a 64 KiB payload to
+`/var/tmp/.Trash/1000/files/payload.bin`, wrote its `.trashinfo` with the
+original path and a deletion date, and appended a `TRASHED` row. The synthetic
+table keeps the edge cases — wrong owner, symlink, missing sticky bit — because
+an unprivileged test cannot create them; the probe only shows that the resolved
+paths match what the table says.
+
 ---
 
 ## 8. Live data
@@ -490,6 +501,17 @@ rather than as empty.
   for exactness. Losing a name in the audit trail is worse than an extra field.
 * **A failed log write warns once and continues.** Stopping mid-sweep because a
   disk is full leaves the tree half-cleaned with no record of which half.
+* **The interactive explorer is exercised through a real terminal.** `tests/tui.rs`
+  allocates a pseudo-terminal, starts the binary inside it, types the keys a
+  person would and reads the screen back, so the draw loop, the confirmation and
+  the move are covered end to end rather than through the app's methods. Because
+  it drives the binary instead of calling the app, it is also the only place a
+  declined confirmation can be shown to leave the payload and the trash untouched
+  — the app's own test can assert only that the key returns no action. Pinned by
+  `the_explorer_draws_a_screen_and_quits_on_q`,
+  `confirming_a_move_puts_the_entry_in_the_trash_with_its_record`,
+  `keeping_the_entry_leaves_it_alone` and
+  `a_bare_analyze_in_a_terminal_opens_the_explorer_over_the_home_it_was_given`.
 
 ---
 

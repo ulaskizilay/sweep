@@ -642,7 +642,10 @@ cargo +nightly fuzz run fuzz_rule_toml -- -max_total_time=600
 
 All of it runs in CI, on both ext4 and a real btrfs loop filesystem — a clean
 pass on ext4 says nothing about a copy-on-write root, and the `FsFacts` layer
-exists precisely for that difference.
+exists precisely for that difference. A separate job builds for `aarch64`, which
+the PKGBUILDs list: it type-checks every target for the triple, links the binary
+with the GNU arm64 toolchain and starts the result under qemu, so the second
+architecture is a build that ran rather than a line in `arch=()`.
 
 | Path | Contents |
 |---|---|
@@ -678,6 +681,19 @@ carries a `// SAFETY:` justification and wraps one syscall.
   and be refused for the wrong reason.
 - The root refusal is tested against a genuine `uid 0` process via `unshare -r`,
   not by inspecting a boolean.
+- A helper that needs to know whether a path exists takes that answer as a
+  parameter. `snapshots_in` is the example: reading the host's own
+  `/home/.snapshots` made `doctor`'s snapshot-attribution test pass or fail
+  depending on whether snapper had ever run there, which is not the question the
+  test asks.
+- The interactive explorer has a test that allocates a real pseudo-terminal,
+  starts the binary inside it and types keys. Every other test of the explorer
+  calls the app or reads `--largest`; none of them draws a frame, so the ratatui
+  loop, crossterm raw mode and the key path that moves a file would otherwise be
+  covered only by a person trying it. The test reads the screen through a small
+  terminal emulator instead of searching the byte stream, because a full-screen
+  program redraws by patching cells: a status line that changes one letter
+  writes only that letter.
 
 ## Contributing
 
