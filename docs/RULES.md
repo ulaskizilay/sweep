@@ -184,8 +184,8 @@ number printed by `rules list` that the run silently disobeys.
 `file-pattern` selects files, so it never has to empty a directory: an entry the
 walk refuses to follow is counted under "left alone" only when the pattern would
 have selected it. Without that narrowing a home-directory rule reported every
-symbolic link it passed on the way — a `Thumbs.db` search across 782 links that
-were not `Thumbs.db` — and the row read as if the rule had found hundreds of
+symbolic link it passed on the way, a `Thumbs.db` search across 782 links that
+were not `Thumbs.db`, and the row read as if the rule had found hundreds of
 candidates.
 
 `if-missing-owner` and the `pkg:` requirement prefix are recognised as valid
@@ -221,7 +221,7 @@ The scan is grouped by the first path component below the root. A group is
 planned only when **all** of these hold:
 
 1. every entry the walk emitted in that group is older than the cutoff;
-2. the walk left nothing in that group alone — no exclusion, no other rule's
+2. the walk left nothing in that group alone, no exclusion, no other rule's
    claimed root, no symlink, no mount point, no unreadable directory, no depth
    limit, no other device.
 
@@ -296,7 +296,7 @@ Every check below applies to the built-in packs and to the overlay equally.
 | `no_rules` | the pack contains no `[[rule]]` |
 | `read_failed` | a file in `rules.d` could not be read |
 | `bad_id` | the id is empty, longer than 64 bytes, or has a character outside `[a-z0-9._-]` |
-| `duplicate_id` | the id already exists — including a built-in id, so the overlay cannot replace one |
+| `duplicate_id` | the id already exists, including a built-in id, so the overlay cannot replace one |
 | `unknown_section` | the section is not one of the sixteen |
 | `unknown_kind` | the kind is not one of the ten |
 | `unsupported_kind` | the kind exists but is not implemented yet (`if-missing-owner`) |
@@ -353,7 +353,7 @@ rule therefore reads manifests, not names:
   `Cargo.toml`, `go.mod`, `pyproject.toml`, `pom.xml`, `build.gradle`,
   `Gemfile`, `terragrunt.hcl`, `composer.json` or `.git`;
 * an **artifact** is selected only when the manifest that produces it is in the
-  same directory — `node_modules` needs `package.json`, `target` needs
+  same directory, `node_modules` needs `package.json`, `target` needs
   `Cargo.toml` or `pom.xml`, `.venv`/`venv` needs a Python manifest, `vendor`
   needs `go.mod`, `composer.json` or `Gemfile`, and so on;
 * `.git` is never a target, and the walk never descends into an artifact, so the
@@ -366,8 +366,8 @@ rule therefore reads manifests, not names:
 `keep_days` is a recency floor, not an age filter in the usual sense: installing
 a dependency updates the artifact directory, so a directory older than a month
 has not been touched by a build since then. `keep_days = 0` is refused on a
-`{home}` root — the project you are in the middle of is the one you least want
-emptied — and any positive window is allowed.
+`{home}` root, the project you are in the middle of is the one you least want
+emptied, and any positive window is allowed.
 
 One artifact is all-or-nothing. If any entry below it cannot be read, or the
 walk hits its entry or time budget, the whole artifact is left in place and
@@ -451,12 +451,12 @@ The retention is a count plus one fact, not an age:
    and reported, but the tree is not half removed.
 
 The launcher is read once more after you confirm, because an update can move it
-while the prompt is open. Any planned item the link names now — or that sits
-inside the entry it names — leaves the plan, and a launcher that cannot be read
+while the prompt is open. Any planned item the link names now, or that sits
+inside the entry it names, leaves the plan, and a launcher that cannot be read
 at that point takes everything its rule planned with it. The report says which
 rule lost items and why; `keep_link_unknown` marks a rule whose answer
-disappeared. The remaining window — the instant between that read and the
-unlink — is R12 in [`SAFETY.md`](SAFETY.md).
+disappeared. The remaining window, the instant between that read and the
+unlink, is R12 in [`SAFETY.md`](SAFETY.md).
 
 `max_depth` and `exclude` are refused at load (`versions_layout`): an exclude
 inside one entry would produce exactly the half-installed tree the kind exists
@@ -517,8 +517,8 @@ and a plan with nothing in it write no log at all.
 ### Rules with `privilege = "root"`
 
 Only the `system` section may delete as root; a root rule anywhere else is a
-load-time `root_privilege` error. Those rules are planned by the user process —
-reading a cache needs no privilege — and then handed to an elevated child by
+load-time `root_privilege` error. Those rules are planned by the user process,
+reading a cache needs no privilege, and then handed to an elevated child by
 `sweep clean --privileged`, or after a yes at the prompt.
 
 The child does not read this file's overlay. It compiles `rules/01-system.toml`
@@ -538,7 +538,7 @@ reports `permission denied`.
    retention at all; if you want a window, that is `dir-age`. `trash-empty` is
    the one exception: the file is in the trash because the user already deleted
    it, so it declares `recoverable = false` and still empties immediately.
-3. Add a test that proves **what it does not delete** — a fresh file, a
+3. Add a test that proves **what it does not delete**, a fresh file, a
    symlink, an excluded directory, a claimed root. The negative space is the
    part that matters.
 4. Run `cargo test -p sweep-core --test rules_corpus`. The catalog digest will

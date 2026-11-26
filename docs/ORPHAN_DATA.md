@@ -125,15 +125,15 @@ could not.
 Orphan-cache deletion is **declined**. The `status` row stays a report, and the
 seven-point contract above stays a contract rather than an implementation plan.
 
-The probe was run again on this date — 99 directories of at least 1 MiB — and it
+The probe was run again on this date, 99 directories of at least 1 MiB, and it
 produced the counterexample the contract was missing:
 
 | Directory | Size | `exec` | `pkg` | `flatpak` | `bin` | dedicated rule |
 |---|---|---|---|---|---|---|
-| `~/.cache/ms-playwright` | 1.6 GiB | — | — | — | — | — |
-| `~/.cache/transcribe-venv` | 7.2 GiB | — | — | — | — | — |
-| `~/.cache/huggingface` | 7.0 GiB | — | — | — | — | `model-caches` (disabled) |
-| `~/.cache/tracker3` | 415 MiB | — | — | — | — | — |
+| `~/.cache/ms-playwright` | 1.6 GiB | - |, | - |, | - |
+| `~/.cache/transcribe-venv` | 7.2 GiB | - |, | - |, | - |
+| `~/.cache/huggingface` | 7.0 GiB | - |, | - |, | `model-caches` (disabled) |
+| `~/.cache/tracker3` | 415 MiB | - |, | - |, | - |
 
 `~/.cache/ms-playwright` is **installed software**. It holds the browser builds
 Playwright downloaded and launches by absolute path out of its own manifest, so

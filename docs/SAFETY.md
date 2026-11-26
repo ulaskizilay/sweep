@@ -62,9 +62,9 @@ it" is never "it is safe".
 | 17 | Parent is not sticky | `sticky_dir` | `lstat` |
 | 18 | Not marked immutable | `immutable` | `ioctl` |
 | 19 | Not held open by a process | `open_by_process` | `/proc` scan |
-| 20 | Open-file scan was actually performed | `probe_unknown` | — |
+| 20 | Open-file scan was actually performed | `probe_unknown` | - |
 
-Checks 1–9 do no I/O, so a forbidden path costs nanoseconds. This matters because
+Checks 1-9 do no I/O, so a forbidden path costs nanoseconds. This matters because
 the scanner calls `validate` once per candidate, and a large cache can hold
 hundreds of thousands.
 
@@ -78,7 +78,7 @@ the literal or the real path.
 The ignore file can only **narrow** a plan. It never widens one: a line cannot
 admit a path that `validate` would refuse, because the check runs before the
 allowlist rather than instead of it. And it is read by the user process only,
-so it cannot reach the elevated child — which is not a gap, because the child
+so it cannot reach the elevated child, which is not a gap, because the child
 acts on the plan it is sent and the parent never sends an ignored path.
 
 ### The same answer is not asked for twice
@@ -89,7 +89,7 @@ cache made it visible: `sweep clean --dry-run` spent two minutes and fifteen
 seconds planning. The fixes changed no decision, only how many times one was
 computed.
 
-* **11–13 are one lookup.** "Which mount covers this path" and "is this path the
+* **11-13 are one lookup.** "Which mount covers this path" and "is this path the
   mount point" are the same question: the longest matching mount point *is* the
   path when the path is a mount point. One pass over the table answers both,
   and the prefix test is a byte comparison against a mount point that the parser
@@ -118,7 +118,7 @@ computed.
   `normalize` would be a byte-for-byte no-op, and it refuses a `..` tail that
   `normalize` would keep, which is why the validator's traversal check still
   runs first. A test generates every noisy shape from the corpus and asserts the
-  implication in one direction only — `true` implies unchanged — plus that every
+  implication in one direction only, `true` implies unchanged, plus that every
   already-normal corpus path takes the borrowed branch.
 * **The plan sort reads a depth it counted once.** `Plan::finish` ordered items
   deepest-first by computing `paths::depth` for both sides of every comparison,
@@ -217,7 +217,7 @@ only tests set it.
 
 ## 5. Symlinked ancestors are followed, then re-checked
 
-The naive rule — "refuse any path with a symlinked component" — breaks real
+The naive rule, "refuse any path with a symlinked component", breaks real
 setups: `~/.cache -> /mnt/ssd/cache`, `/home -> /var/home`, `~/Documents ->
 ~/Sync/Documents`. Refusing them means the tool silently cleans nothing on a
 large fraction of machines, which is its own failure mode.
@@ -259,14 +259,14 @@ Properties this buys:
   the plan. A path replaced after planning yields `race_changed`, not a deletion.
 
 The scanner is responsible for emitting children before parents (post-order).
-That ordering is a scanner test, not a funnel guarantee — the funnel's job is to
+That ordering is a scanner test, not a funnel guarantee, the funnel's job is to
 make a wrong order harmless.
 
 ### A pair is ordered by the sink, not by the sort
 
 Emptying the trash removes two files per entry: the payload and the
 `.trashinfo` record that names it. The record must follow the payload, and
-`Plan::finish` sorting deepest-first is not enough to promise that — a shallow
+`Plan::finish` sorting deepest-first is not enough to promise that, a shallow
 payload ties with its record on depth, and a refused payload would still take the
 record with it.
 
@@ -290,7 +290,7 @@ The fallback is only entered on `ENOSYS` or `EINVAL`. **Never on `EPERM`**: a
 permission denial is a real failure, and falling back there would replace a
 kernel-enforced guarantee with an emulation the caller did not ask for.
 
-Both paths must reach the **same verdict**, which is not a theoretical concern —
+Both paths must reach the **same verdict**, which is not a theoretical concern,
 `kernels_agree_on_every_component_shape` found a real disagreement the first time
 it ran: `O_PATH|O_NOFOLLOW` reports a symlink as `ENOTDIR`, not `ELOOP`, so the
 fallback was classifying a plain file in the middle of a path as a symlink
@@ -300,11 +300,11 @@ apart.
 ### A move writes its record after both handles are open
 
 The trash is the one sink that moves instead of unlinking. `Trash::send` opens
-the source's parent and the destination's `files` directory — the home trash's or
-the entry's own mount's — with those same no-symlink handles, and only then
+the source's parent and the destination's `files` directory, the home trash's or
+the entry's own mount's, with those same no-symlink handles, and only then
 writes the `.trashinfo` record and renames. Opening a directory can
-refuse but can never move anything, so doing it first means a refusal — a
-symlinked ancestor, a permission denial — leaves the trash untouched instead of
+refuse but can never move anything, so doing it first means a refusal, a
+symlinked ancestor, a permission denial, leaves the trash untouched instead of
 a record offering to restore a payload that was never sent. A record whose
 rename then fails is removed, because a payload without a record would be
 invisible to every restore tool while a record without a payload is a broken
@@ -323,7 +323,7 @@ Searching for a free name and moving onto it are two steps, so the name can be
 taken in between by another sweep, a file manager emptying its own trash, or the
 same command in another terminal. A plain `renameat` would replace whatever
 arrived there, which deletes that process's payload while its `.trashinfo`
-record still describes it — data lost inside the one directory the user was
+record still describes it, data lost inside the one directory the user was
 told is recoverable.
 
 The move uses `RENAME_NOREPLACE`, so that race is `EEXIST`, and the caller
@@ -374,7 +374,7 @@ measured on a machine whose `/var/tmp` is a separate btrfs subvolume: with no
 `mkdir -m 1777 /var/tmp/.Trash`, the same keystroke moved a 64 KiB payload to
 `/var/tmp/.Trash/1000/files/payload.bin`, wrote its `.trashinfo` with the
 original path and a deletion date, and appended a `TRASHED` row. The synthetic
-table keeps the edge cases — wrong owner, symlink, missing sticky bit — because
+table keeps the edge cases, wrong owner, symlink, missing sticky bit, because
 an unprivileged test cannot create them; the probe only shows that the resolved
 paths match what the table says.
 
@@ -454,8 +454,8 @@ every visible mount, and neither is a reason to proceed.
 
 Some caches are not trees of files: each file is stored once under a content
 address and linked into every name that uses it. The Hugging Face hub is the
-first one sweep reaches — `blobs/<etag>` plus `snapshots/<revision>/<path>`
-symlinks — and a name-based sweep there is actively harmful. Deleting the blobs
+first one sweep reaches, `blobs/<etag>` plus `snapshots/<revision>/<path>`
+symlinks, and a name-based sweep there is actively harmful. Deleting the blobs
 leaves every snapshot dangling, so the model looks installed, fails at load time,
 and never re-downloads because its revision is still in `refs/`.
 
@@ -490,7 +490,7 @@ rather than as empty.
 * **Planning and deleting are separated by consent.** `clean` builds and
   validates the whole plan before asking anything. The prompt is skipped with
   `--yes`, refused when stdin is not a terminal, and a declined run writes
-  nothing at all — no `unlinkat`, no log row, no state directory. Every item is
+  nothing at all, no `unlinkat`, no log row, no state directory. Every item is
   re-checked against its planned `dev`/`ino` at the sink, so a tree that changed
   while the question was on screen is skipped rather than removed.
 * **The operation log is append-only JSONL**, one record per line, written with a
@@ -507,7 +507,7 @@ rather than as empty.
   the move are covered end to end rather than through the app's methods. Because
   it drives the binary instead of calling the app, it is also the only place a
   declined confirmation can be shown to leave the payload and the trash untouched
-  — the app's own test can assert only that the key returns no action. Pinned by
+ , the app's own test can assert only that the key returns no action. Pinned by
   `the_explorer_draws_a_screen_and_quits_on_q`,
   `confirming_a_move_puts_the_entry_in_the_trash_with_its_record`,
   `keeping_the_entry_leaves_it_alone` and
@@ -518,7 +518,7 @@ rather than as empty.
 ## 11. Privilege
 
 `sweep` **refuses to run as root** (exit code 78). A user-scoped tool that runs
-as root would source user-owned state — config, rule files, cache paths — with
+as root would source user-owned state, config, rule files, cache paths, with
 privilege it was not granted for.
 
 The check runs before command dispatch, not inside each subcommand, so a new
@@ -549,8 +549,8 @@ it. So the work is split in two:
    `not_elevated`, the user items still happen, and the summary says how many
    were left in place.
 3. **Apply as root in the same binary.** The parent re-executes `sweep` through
-   `run0` (preferred) or `sudo` with a **fixed argv** — `--`, the current
-   executable, `__apply` — and the request on **stdin**. No shell exists between
+   `run0` (preferred) or `sudo` with a **fixed argv**, `--`, the current
+   executable, `__apply`, and the request on **stdin**. No shell exists between
    the two processes, so no path can be word-split, globbed or interpreted, and
    nothing on the command line can add an argument to a privileged program.
 
@@ -586,8 +586,8 @@ different file, and the wire format is the one place where that mistake would be
 invisible.
 
 The trade-off is explicit: the elevated child is a little more code than a
-`sudo rm` wrapper, and the alternative — one process that acquires privilege and
-then keeps walking a directory tree — is a much larger privileged surface.
+`sudo rm` wrapper, and the alternative, one process that acquires privilege and
+then keeps walking a directory tree, is a much larger privileged surface.
 
 ### A package removal is pacman's transaction
 
@@ -603,7 +603,7 @@ The elevated argv is `run0 -- pacman -Rs --noconfirm <name>`. `pacman` is
 root-controlled `PATH`, so a directory earlier in the invoking user's `PATH`
 cannot become the package manager that runs as root. Names travel as separate
 argv entries, never through a shell, and each one is checked before the argv is
-built — no leading `-`, no `/`, no space, no control byte — on top of the check
+built, no leading `-`, no `/`, no space, no control byte, on top of the check
 that it appears in `pacman -Qe`.
 
 A short list of packages the machine needs to boot (`base`, `pacman`, `glibc`,
@@ -616,8 +616,8 @@ is the one thing a package manager can preserve for a file it no longer owns.
 
 What pacman leaves in `$HOME` is the user's data, and it is the only part of
 this command that sweep moves itself. Leftovers are matched by exact name in the
-four XDG roots — `~/.config/<name>`, `~/.local/share/<name>`, `~/.cache/<name>`,
-`~/.local/state/<name>` — with no prefix, suffix, case folding or vendor
+four XDG roots, `~/.config/<name>`, `~/.local/share/<name>`, `~/.cache/<name>`,
+`~/.local/state/<name>`, with no prefix, suffix, case folding or vendor
 wildcard, and they are sent to the freedesktop trash rather than deleted, through
 the same code `analyze` uses. The move happens only after the removal succeeded:
 a nonzero status means the package is still installed and its configuration is
@@ -641,7 +641,7 @@ access to that parent can replace the leaf.
 swap cannot redirect the delete into another directory; `dev`/`ino` are compared
 before the syscall, so a replaced inode is refused as `race_changed`.
 *What remains:* if the replacement is a different inode, `race_changed` catches
-it — but the comparison and the `unlinkat` are still two syscalls, so a window of
+it, but the comparison and the `unlinkat` are still two syscalls, so a window of
 nanoseconds exists. Closing it entirely requires `unlinkat` to accept an fd
 rather than a name, which Linux does not offer.
 
@@ -675,8 +675,8 @@ syscalls" to "between the first item under a directory and the plan". The
 `dev`/`ino` comparison above does not narrow that wider window: the plan records
 the `dev`/`ino` it read from the *resolved* path, so a stale resolution records the
 stale path's own metadata, and the sink then confirms it instead of refusing it.
-The coincidence this risk currently requires — a replacement directory holding an
-entry with the same inode — would no longer be required.
+The coincidence this risk currently requires, a replacement directory holding an
+entry with the same inode, would no longer be required.
 
 A verified cache is possible: `lstat` the literal parent for every item and reuse
 the resolved path only while its `dev`/`ino` are unchanged. That closes the
@@ -692,7 +692,7 @@ A snapshot stored somewhere other than `.snapshots`, `@@snapshots`, `timeshift`
 or `/var/lib/timeshift` is not recognised. The lists are constants in
 `fs_facts.rs`; widening them is a one-line change, but no list is complete.
 `FsFacts` is the seam where a real tool query (snapper, `zfs list -t snapshot`)
-belongs — tracked for the snapshot milestone.
+belongs, tracked for the snapshot milestone.
 
 ### R4. Some opens are invisible
 
@@ -711,21 +711,21 @@ what was reclaimed. This is an accounting gap, not a deletion risk.
 Summed `st_blocks` over-counts shared extents on btrfs/XFS-reflink. Reports label
 the figure **accounted** and note the CoW caveat when a rule root is on such a
 filesystem, so nothing is claimed as freed. Printing the `statvfs` delta next to
-it — rather than instead of it — is the remaining accounting task.
+it, rather than instead of it, is the remaining accounting task.
 
 ### R7. A paused download looks abandoned
 
 `huggingface_hub` writes `<etag>.incomplete` while a download runs and renames it
 on completion. A download paused for longer than the retention is
 indistinguishable from one whose client died, so `hf-cache` will plan it. The
-cost is a re-download — the partial bytes are the only thing lost — and the
+cost is a re-download, the partial bytes are the only thing lost, and the
 90-day default is what keeps that from being a nuisance. There is no marker on
 disk that separates the two cases, so this is accepted rather than solved.
 
 ### R8. A root-only cache cannot be planned
 
 Planning happens as the user, before any password is typed. A root cache with
-`0700` permissions — `/var/cache/ldconfig` on a default Arch install — is
+`0700` permissions, `/var/cache/ldconfig` on a default Arch install, is
 therefore invisible: the rule reports `permission denied`, the summary says the
 cache could not be read, and nothing from it is planned. `/var/cache/ldconfig`
 is disabled in the catalog for exactly that reason rather than shipped as a rule
@@ -734,7 +734,7 @@ that can never fire.
 Solving this means the child would have to *propose* the items and the user
 would confirm a plan built by root. That is a larger change, it weakens the
 "the plan you confirmed is the plan that runs" property, and `aux-cache` is a few
-hundred kilobytes — not worth the trade today. Caches that are world-readable,
+hundred kilobytes, not worth the trade today. Caches that are world-readable,
 which is most of them (`/var/cache/man`, `/var/cache/fontconfig`), plan normally.
 
 ### R9. The preview's open-file scan is weaker than the child's
@@ -742,7 +742,7 @@ which is most of them (`/var/cache/man`, `/var/cache/fontconfig`), plan normally
 `/proc/<pid>/fd` is readable only for the caller's own processes. The user
 process therefore cannot see that a root daemon holds a file open, so a preview
 may list an item the child will refuse. The direction of that error is the safe
-one — the preview over-counts, the apply refuses — and the child, running as
+one, the preview over-counts, the apply refuses, and the child, running as
 root, performs the scan with full visibility before it removes anything.
 
 ### R10. The package cache does not know what is installed
@@ -768,7 +768,7 @@ policy that permits it is chosen by the scanner, not by the rule file. Two walks
 emit links: a `project-artifacts` tree, and the tree inside a `versions` entry.
 Every other walk treats a link as a block, so the policy cannot reach it
 (`Reason::LeafSymlink`). The plan records the fact (`PlanItem::is_symlink`), and
-the funnel unlinks only an item the plan described as a link — a file that became
+the funnel unlinks only an item the plan described as a link, a file that became
 a link between the preview and the run is refused.
 
 *What limits it:* the target is never opened, never followed and never removed.
@@ -795,21 +795,21 @@ the link while the question is on screen. The funnel re-checks
 re-point changes no inode, so it cannot catch this one.
 
 *What limits it:* the launcher is read again after consent and before the first
-unlink, and every planned item the link now names — or that sits inside the
-entry it names — is withdrawn from the plan. A launcher that cannot be read at
+unlink, and every planned item the link now names, or that sits inside the
+entry it names, is withdrawn from the plan. A launcher that cannot be read at
 that point withdraws everything its rule planned, because the answer the plan
 was built from is gone. That leaves only the instant between the re-read and
 the unlink, not the whole prompt. `--yes` closes most of what is left. The
 consequence of that instant is a dangling launcher, not lost work: the removed
 entry is a re-downloadable release, which is why the rule is
 `recoverable = true`, and the tool's installer recreates the link on the next
-run. Nothing inside the entry is user data — a `versions` root holds installed
+run. Nothing inside the entry is user data, a `versions` root holds installed
 releases, never configuration, sessions or transcripts.
 
 *What remains:* an update that re-points the link in the microseconds between
 the re-read and the unlink can still lose the release that just became current.
-Closing it completely needs the installer to cooperate — a lock it takes while
-it swaps the link — which no third-party tool offers, so this stays a stated
+Closing it completely needs the installer to cooperate, a lock it takes while
+it swaps the link, which no third-party tool offers, so this stays a stated
 risk rather than a solved one.
 
 ### R13. A filesystem without `RENAME_NOREPLACE` reopens the name race
@@ -822,7 +822,7 @@ looks for the next free name, so neither side loses a payload.
 *What limits it:* a kernel older than 3.15 answers `ENOSYS` and a filesystem
 that does not implement the flag answers `EINVAL`; both fall back to a plain
 `renameat`, which silently replaces the entry that arrived first. Every
-filesystem sweep is likely to meet — ext4, btrfs, xfs, tmpfs — implements the
+filesystem sweep is likely to meet, ext4, btrfs, xfs, tmpfs, implements the
 flag, and the fallback exists so that an exotic mount can still receive a
 trashed entry instead of refusing every move and losing the whole explorer
 feature there.

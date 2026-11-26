@@ -2,7 +2,7 @@
 
 # sweep
 
-**Safe, previewable disk cleanup and system health for Arch Linux — with one validated way to delete a file.**
+**Safe, previewable disk cleanup and system health for Arch Linux, with one validated way to delete a file.**
 
 [![CI](https://github.com/ulaskizilay/sweep/actions/workflows/ci.yml/badge.svg)](https://github.com/ulaskizilay/sweep/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -13,7 +13,7 @@
 
 <img src="docs/assets/doctor.svg" alt="sweep doctor reporting mounts, copy-on-write status and snapshot directories" width="780">
 
-<sub><code>sweep doctor</code> — inspects mounts, copy-on-write filesystems, snapshot trees, and kernel capabilities before anything runs.</sub>
+<sub><code>sweep doctor</code>: inspects mounts, copy-on-write filesystems, snapshot trees, and kernel capabilities before anything runs.</sub>
 
 </div>
 
@@ -21,7 +21,7 @@
 
 ## Overview
 
-`sweep` reclaims cache, log, build artifact, and package space on Arch Linux without risking system files, active databases, or snapshots. Every destructive operation goes through a read-only planning phase, a human confirmation gate, and a single validated deletion funnel — or moves recoverable items to the freedesktop trash.
+`sweep` reclaims cache, log, build artifact, and package space on Arch Linux without risking system files, active databases, or snapshots. Every destructive operation goes through a read-only planning phase, a human confirmation gate, and a single validated deletion funnel (or moves recoverable items to the freedesktop trash).
 
 - **One deletion funnel**: Every `clean` path passes twenty checks before reaching a single non-recursive `unlinkat` syscall.
 - **Fail-closed by design**: Missing mount info, unreadable `/proc` entries, or active file handles always result in a refusal with a stable reason code.
@@ -92,7 +92,7 @@ sequenceDiagram
 
 ### System Health Snapshot (`sweep status`)
 
-Read-only summary of disk usage, memory, package cache, orphan packages, unowned cache directories, trash, user systemd units, and the last sweep — with actionable next commands.
+Read-only summary of disk usage, memory, package cache, orphan packages, unowned cache directories, trash, user systemd units, and the last sweep, with actionable next commands.
 
 <div align="center">
 <img src="docs/assets/status.svg" alt="sweep status showing host health, disk usage, package cache, orphan cache, and actionable recommendations" width="780">
@@ -236,7 +236,7 @@ install -m755 sweep-*/bin/sweep ~/.local/bin/
 Two packages are maintained in [`packaging/`](packaging/README.md): `sweep-cli` (pinned release tag) and `sweep-cli-git` (tracks `main`):
 
 ```bash
-git clone git@github.com:ulaskizilay/sweep.git
+git clone https://github.com/ulaskizilay/sweep.git
 cd sweep/packaging/sweep-cli
 makepkg -si
 ```
@@ -244,7 +244,7 @@ makepkg -si
 ### Build from Source
 
 ```bash
-git clone git@github.com:ulaskizilay/sweep.git
+git clone https://github.com/ulaskizilay/sweep.git
 cd sweep
 cargo build --release --locked
 ./target/release/sweep doctor
