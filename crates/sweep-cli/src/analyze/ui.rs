@@ -20,7 +20,7 @@ use sweep_core::paths::Xdg;
 
 use super::app::{Action, App, Mode};
 use super::view::{self, Row};
-use crate::format::{human_bytes, human_count};
+use crate::format::{human_bytes, plural, plural_forms};
 use crate::trash::Trash;
 use crate::EXIT_UNSUPPORTED_ENVIRONMENT;
 
@@ -217,7 +217,8 @@ fn draw_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(format!(
-            "  {count} entries, {}  {sort}{filter}",
+            "  {}, {}  {sort}{filter}",
+            plural_forms(count as u64, "entry", "entries"),
             human_bytes(app.total_bytes())
         )),
     ]);
@@ -285,7 +286,7 @@ fn draw_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         Line::from(format!(" {}", app.status))
     } else {
         let items: u64 = app.rows().iter().filter_map(Row::items).sum();
-        Line::from(format!(" {} items measured", human_count(items)))
+        Line::from(format!(" {} measured", plural(items as usize, "item")))
     };
     let keys = Line::from(Span::styled(
         " ↑↓ move  ⏎ open  ⌫ up  s sort  S reverse  / filter  d trash  r rescan  ? help  q quit",
@@ -304,9 +305,9 @@ fn draw_confirm(frame: &mut Frame<'_>, app: &App) {
         "a symbolic link; its target is not touched".to_string()
     } else if row.is_dir {
         format!(
-            "{}, {} items",
+            "{}, {}",
             human_bytes(row.bytes()),
-            human_count(row.items().unwrap_or(0))
+            plural(row.items().unwrap_or(0) as usize, "item")
         )
     } else {
         human_bytes(row.bytes())

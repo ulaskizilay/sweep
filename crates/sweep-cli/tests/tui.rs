@@ -528,3 +528,58 @@ fn a_bare_analyze_in_a_terminal_opens_the_explorer_over_the_home_it_was_given() 
     session.type_keys("q");
     assert_eq!(session.finish(20), 0);
 }
+
+#[test]
+fn a_directory_holding_one_entry_is_one_item_in_the_confirmation() {
+    let home = Home::new();
+    let tree = home.root().join("tree");
+    std::fs::create_dir_all(tree.join("only")).expect("mkdir");
+    std::fs::write(tree.join("only/one.txt"), b"x").expect("write");
+
+    let mut session = Session::start(&[OsStr::new("analyze"), tree.as_os_str()], &home);
+    assert!(
+        session.wait_for("q quit", 20),
+        "the list never appeared; the screen held:\n{}",
+        session.screen()
+    );
+    // The directory's size and item count arrive together from the measuring
+    // thread, and the footer prints the count the dialog is about to repeat.
+    // Waiting for it is waiting for the number, not guessing a duration.
+    assert!(
+        session.wait_for("1 item measured", 20),
+        "the directory was never measured; the screen held:\n{}",
+        session.screen()
+    );
+    // The header counts the entries on screen, which is also one.
+    assert!(
+        session.screen().contains("1 entry,"),
+        "one entry is one entry in the header: {}",
+        session.screen()
+    );
+    assert!(
+        !session.screen().contains("1 entries"),
+        "one entry is not 1 entries: {}",
+        session.screen()
+    );
+
+    session.type_keys("d");
+    assert!(
+        session.wait_for("Move to the trash?", 20),
+        "the confirmation never appeared; the screen held:\n{}",
+        session.screen()
+    );
+    let screen = session.screen();
+    assert!(
+        screen.contains("1 item —"),
+        "one entry is one item: {screen}"
+    );
+    assert!(
+        !screen.contains("1 items"),
+        "one entry is not one items: {screen}"
+    );
+
+    session.type_keys("n");
+    assert!(session.wait_for("kept", 20), "no refusal was recorded");
+    session.type_keys("q");
+    assert_eq!(session.finish(20), 0);
+}

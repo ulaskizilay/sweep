@@ -20,7 +20,7 @@ use sweep_core::probe::RealProbe;
 use sweep_core::scan::{self, Limits, Select, Spec};
 use sweep_core::{sys, units, FsProbe};
 
-use crate::format::{human_bytes, human_count, percent};
+use crate::format::{human_bytes, human_count, percent, plural_forms};
 use crate::orphan_cache::{self, Report as OrphanReport};
 
 /// How a row should be read.
@@ -353,7 +353,7 @@ fn orphan_cache_finding(xdg: &Xdg, probe: &dyn FsProbe) -> Finding {
             }
             let bytes: u64 = candidates.iter().map(|candidate| candidate.bytes).sum();
             let largest = &candidates[0];
-            let count = plural(candidates.len() as u64, "directory", "directories");
+            let count = plural_forms(candidates.len() as u64, "directory", "directories");
             let value = if complete {
                 format!(
                     "{} in {count}, largest {}",
@@ -394,7 +394,11 @@ fn trash_finding(xdg: &Xdg, limits: &Limits, probe: &dyn FsProbe) -> Finding {
             id: "trash",
             label: "trash",
             state: State::Info,
-            value: format!("{} in {} items", human_bytes(bytes), human_count(files)),
+            value: format!(
+                "{} in {}",
+                human_bytes(bytes),
+                plural_forms(files, "item", "items")
+            ),
             // Emptying the trash is part of `clean`, which removes each payload
             // together with the `.trashinfo` record that names it.
             next: Some("sweep clean --only user-essentials".to_string()),
@@ -456,12 +460,12 @@ fn systemd_finding(xdg: &Xdg) -> Finding {
         } else if report.unresolved == 0 {
             format!(
                 "{}, every program present",
-                plural(report.total as u64, "unit", "units")
+                plural_forms(report.total as u64, "unit", "units")
             )
         } else {
             format!(
                 "{}, {} not checkable",
-                plural(report.total as u64, "unit", "units"),
+                plural_forms(report.total as u64, "unit", "units"),
                 report.unresolved
             )
         };
@@ -569,9 +573,9 @@ fn last_run_finding(xdg: &Xdg) -> Finding {
             .and_then(|value| value.as_str())
             == Some(session);
     let counted = if partial {
-        format!("at least {}", plural(removed, "item", "items"))
+        format!("at least {}", plural_forms(removed, "item", "items"))
     } else {
-        plural(removed, "item", "items")
+        plural_forms(removed, "item", "items")
     };
     Finding {
         id: "last.run",
@@ -738,9 +742,9 @@ fn age_of(ts: &str) -> String {
     let delta = now_unix().saturating_sub(seconds);
     match delta {
         d if d < 60 => "just now".to_string(),
-        d if d < 3_600 => format!("{} ago", plural((d / 60) as u64, "minute", "minutes")),
-        d if d < 86_400 => format!("{} ago", plural((d / 3_600) as u64, "hour", "hours")),
-        d => format!("{} ago", plural((d / 86_400) as u64, "day", "days")),
+        d if d < 3_600 => format!("{} ago", plural_forms((d / 60) as u64, "minute", "minutes")),
+        d if d < 86_400 => format!("{} ago", plural_forms((d / 3_600) as u64, "hour", "hours")),
+        d => format!("{} ago", plural_forms((d / 86_400) as u64, "day", "days")),
     }
 }
 
@@ -780,14 +784,6 @@ fn duration(seconds: u64) -> String {
         format!("{hours}h {minutes}m")
     } else {
         format!("{minutes}m")
-    }
-}
-
-fn plural(count: u64, one: &str, many: &str) -> String {
-    if count == 1 {
-        format!("1 {one}")
-    } else {
-        format!("{count} {many}")
     }
 }
 
@@ -920,8 +916,8 @@ mod tests {
 
     #[test]
     fn plural_says_one_item_for_one() {
-        assert_eq!(plural(1, "item", "items"), "1 item");
-        assert_eq!(plural(0, "item", "items"), "0 items");
-        assert_eq!(plural(2, "item", "items"), "2 items");
+        assert_eq!(plural_forms(1, "item", "items"), "1 item");
+        assert_eq!(plural_forms(0, "item", "items"), "0 items");
+        assert_eq!(plural_forms(2, "item", "items"), "2 items");
     }
 }

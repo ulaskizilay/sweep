@@ -38,10 +38,15 @@ pub(crate) fn human_count(count: u64) -> String {
 /// The singular case is the whole reason this exists: "removed 1 packages"
 /// reads as a bug in the program, not as a small run.
 pub(crate) fn plural(count: usize, noun: &str) -> String {
+    plural_forms(count as u64, noun, &format!("{noun}s"))
+}
+
+/// `1 entry`, `2 entries` for a noun whose plural is not `noun` plus `s`.
+pub(crate) fn plural_forms(count: u64, one: &str, many: &str) -> String {
     if count == 1 {
-        format!("1 {noun}")
+        format!("1 {one}")
     } else {
-        format!("{} {noun}s", human_count(count as u64))
+        format!("{} {many}", human_count(count))
     }
 }
 
