@@ -44,6 +44,13 @@ pub struct App {
     /// Row indices in display order.
     order: Vec<usize>,
     selected: usize,
+    /// Whether the user has put the cursor somewhere in this directory.
+    ///
+    /// Until they do, the cursor stays on the first row: the sizes that arrive
+    /// after the directory opens re-sort the list, and pinning the cursor to the
+    /// first row keeps it on the entry the user is about to look at instead of
+    /// leaving it on whichever name the empty list happened to sort first.
+    chosen: bool,
     pub sort: Sort,
     pub reverse: bool,
     pub filter: String,
@@ -66,6 +73,7 @@ impl App {
             rows,
             order,
             selected: 0,
+            chosen: false,
             sort: Sort::Size,
             reverse: false,
             filter: String::new(),
@@ -143,12 +151,17 @@ impl App {
         }
         if applied > 0 {
             self.reorder();
-            self.reselect(Some(&path));
+            if self.chosen {
+                self.reselect(Some(&path));
+            } else {
+                self.selected = 0;
+            }
             self.refresh_status();
         }
     }
 
     pub fn move_by(&mut self, delta: isize) {
+        self.chosen = true;
         if self.order.is_empty() {
             self.selected = 0;
             return;
@@ -159,6 +172,7 @@ impl App {
     }
 
     pub fn jump(&mut self, to_end: bool) {
+        self.chosen = true;
         if self.order.is_empty() {
             self.selected = 0;
         } else if to_end {
@@ -217,6 +231,7 @@ impl App {
             .position(|row| self.rows[*row].path == came_from)
         {
             self.selected = index;
+            self.chosen = true;
         }
         true
     }
@@ -231,6 +246,7 @@ impl App {
         }
         if let Some(path) = path {
             self.reselect(Some(&path));
+            self.chosen = true;
         }
         self.status = "rescanned".to_string();
     }
@@ -240,6 +256,7 @@ impl App {
         self.rows = rows;
         self.cwd = path;
         self.selected = 0;
+        self.chosen = false;
         self.error = None;
         self.reorder();
         self.start_measuring();
@@ -287,6 +304,7 @@ impl App {
         self.sort = self.sort.next();
         self.reorder();
         self.reselect(path.as_deref());
+        self.chosen = true;
         self.status = format!(
             "sorted by {}{}",
             self.sort.label(),
@@ -299,6 +317,7 @@ impl App {
         let path = self.selected_path();
         self.reorder();
         self.reselect(path.as_deref());
+        self.chosen = true;
         self.status = format!(
             "sorted by {}{}",
             self.sort.label(),
@@ -740,5 +759,62 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         panic!("the sizes never arrived");
+    }
+
+    #[test]
+    fn the_sizes_settling_leave_the_cursor_on_the_first_row_until_it_is_moved() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("aaa")).expect("mkdir");
+        std::fs::write(temp.path().join("aaa/one.txt"), b"one").expect("write");
+        std::fs::create_dir_all(temp.path().join("zzz")).expect("mkdir");
+        std::fs::write(temp.path().join("zzz/big.bin"), vec![b'x'; 65536]).expect("write");
+
+        let mut app = App::open(temp.path()).expect("open");
+        assert_eq!(
+            app.selected_row().expect("row").name,
+            "aaa",
+            "an unmeasured list has no sizes to sort by, so it falls back to the name"
+        );
+
+        for _ in 0..600 {
+            app.tick();
+            if app.measuring().is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        assert_eq!(names(&app)[0], "zzz", "the measured sizes re-sort the list");
+        assert_eq!(
+            app.selected(),
+            0,
+            "the cursor never left the first row: {:?}",
+            names(&app)
+        );
+        assert_eq!(app.selected_row().expect("row").name, "zzz");
+    }
+
+    #[test]
+    fn a_moved_cursor_stays_on_its_row_while_sizes_arrive() {
+        let temp = fixture();
+        let mut app = App::open(temp.path()).expect("open");
+        let chosen = app.selected_row().expect("row").path.clone();
+        app.on_key(KeyCode::Char('j'));
+        let moved_to = app.selected_row().expect("row").path.clone();
+        assert_ne!(chosen, moved_to, "the fixture has a second row");
+
+        for _ in 0..600 {
+            app.tick();
+            if app.measuring().is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        assert_eq!(
+            app.selected_row().expect("row").path,
+            moved_to,
+            "the row the user chose is the row that stays highlighted"
+        );
     }
 }
