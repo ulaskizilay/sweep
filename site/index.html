@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>sweep | Safe disk cleanup and system health for Arch Linux</title>
+  <meta name="description" content="Safe, previewable disk cleanup, TUI explorer, and system health CLI for Arch Linux, with one validated deletion funnel.">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container nav">
+      <a class="brand" href="#">sweep</a>
+      <nav aria-label="Primary">
+        <ul class="nav-links">
+          <li><a href="#guarantees">Safety</a></li>
+          <li><a href="#previews">Previews</a></li>
+          <li><a href="#commands">Commands</a></li>
+          <li><a href="#install">Install</a></li>
+          <li><a href="https://github.com/ulaskizilay/sweep">GitHub</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container">
+        <span class="badge">ARCH LINUX | RUST 1.82+ | MIT</span>
+        <h1>Safe, previewable disk cleanup for Arch Linux.</h1>
+        <p>
+          Reclaim cache, log, build artifact, and package space through a read-only
+          plan, a human confirmation gate, and one validated deletion funnel.
+        </p>
+        <div class="actions">
+          <a class="btn btn-primary" href="#install">Install sweep</a>
+          <a class="btn btn-secondary" href="https://github.com/ulaskizilay/sweep">View on GitHub</a>
+        </div>
+        <div class="hero-diagram card">
+          <img src="assets/pipeline-dark.svg" alt="sweep safety pipeline from rules to validated plan and single deletion syscall" width="900">
+        </div>
+      </div>
+    </section>
+
+    <section id="guarantees" class="section">
+      <div class="container">
+        <h2 class="section-title">Safety by construction</h2>
+        <p class="section-subtitle">
+          Every destructive action passes compile-time protected roots, mount checks, and open-file detection before touching disk.
+        </p>
+        <div class="grid">
+          <article class="card">
+            <h3>One deletion funnel</h3>
+            <p>
+              Every <code>clean</code> item goes through twenty validation checks and a single non-recursive <code>unlinkat</code> syscall.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Never runs as root</h3>
+            <p>
+              <code>sweep</code> refuses <code>uid 0</code>. System caches elevate only after confirmation via <code>run0</code> or <code>sudo</code> with a fixed argv.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Recoverable where it matters</h3>
+            <p>
+              Interactive <code>analyze</code> deletions and <code>uninstall</code> leftovers move to freedesktop trash via <code>renameat2</code>.
+            </p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="previews" class="section">
+      <div class="container">
+        <h2 class="section-title">Terminal previews</h2>
+        <p class="section-subtitle">
+          Inspect system health, preview a deterministic plan, or explore disk usage interactively.
+        </p>
+        <div class="preview-tabs" role="tablist" aria-label="Command previews">
+          <button class="tab-btn" type="button" role="tab" aria-selected="true"
+            data-src="assets/status.svg"
+            data-alt="sweep status showing host health, disk usage, package cache, and recommendations"
+            data-caption="sweep status: read-only snapshot of disk, package cache, orphan data, and user units.">
+            sweep status
+          </button>
+          <button class="tab-btn" type="button" role="tab" aria-selected="false"
+            data-src="assets/clean-dry-run.svg"
+            data-alt="sweep clean --dry-run previewing a validated cleanup plan with plan hash"
+            data-caption="sweep clean --dry-run: previews every section, refused item, and deterministic plan hash.">
+            sweep clean --dry-run
+          </button>
+          <button class="tab-btn" type="button" role="tab" aria-selected="false"
+            data-src="assets/analyze.svg"
+            data-alt="sweep analyze TUI disk explorer listing directories by size"
+            data-caption="sweep analyze: full-screen TUI explorer that moves selected items to the trash.">
+            sweep analyze
+          </button>
+          <button class="tab-btn" type="button" role="tab" aria-selected="false"
+            data-src="assets/doctor.svg"
+            data-alt="sweep doctor reporting mounts, copy-on-write status, and snapshot directories"
+            data-caption="sweep doctor: verifies mounts, btrfs CoW, snapshot trees, and openat2 support.">
+            sweep doctor
+          </button>
+        </div>
+        <div class="preview-frame">
+          <img id="preview-img" src="assets/status.svg" alt="sweep status showing host health, disk usage, package cache, and recommendations" width="780">
+          <p id="preview-caption" class="preview-caption">
+            sweep status: read-only snapshot of disk, package cache, orphan data, and user units.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section id="commands" class="section">
+      <div class="container">
+        <h2 class="section-title">Command suite</h2>
+        <p class="section-subtitle">
+          Focused subcommands for cache cleanup, project artifacts, AUR helpers, and pacman maintenance.
+        </p>
+        <div class="command-list">
+          <div class="command-item">
+            <code>sweep clean</code>
+            <span>Rule-based cache, log, and trash cleanup with dry-run preview and confirmation.</span>
+          </div>
+          <div class="command-item">
+            <code>sweep purge</code>
+            <span>Removes build artifacts only when paired with their project manifest.</span>
+          </div>
+          <div class="command-item">
+            <code>sweep aur</code>
+            <span>Cleans built .pkg.tar.* archives while keeping PKGBUILDs and sources intact.</span>
+          </div>
+          <div class="command-item">
+            <code>sweep installer</code>
+            <span>Removes stale downloaded .pkg.tar.zst, .iso, and .AppImage files.</span>
+          </div>
+          <div class="command-item">
+            <code>sweep analyze</code>
+            <span>Interactive TUI disk explorer and --largest report for scripts.</span>
+          </div>
+          <div class="command-item">
+            <code>sweep uninstall</code>
+            <span>Previews pacman -Rs transactions and moves exact-name leftovers to trash.</span>
+          </div>
+          <div class="command-item">
+            <code>sweep status / doctor</code>
+            <span>Read-only system health summary and mount/capability diagnostics.</span>
+          </div>
+          <div class="command-item">
+            <code>sweep history / optimize</code>
+            <span>Audits past operations from operations.jsonl and rebuilds user indexes.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="install" class="section">
+      <div class="container">
+        <h2 class="section-title">Install</h2>
+        <p class="section-subtitle">
+          Install from the release tarball, build with Arch PKGBUILD, or compile from source with Cargo.
+        </p>
+
+        <div class="code-block">
+          <button class="copy-btn" type="button" data-copy="release-cmd">Copy</button>
+          <pre id="release-cmd">gh release download -R ulaskizilay/sweep -p 'sweep-*-x86_64-linux.tar.gz' -p SHA256SUMS
+sha256sum -c SHA256SUMS
+tar -xzf sweep-*-x86_64-linux.tar.gz
+install -m755 sweep-*/bin/sweep ~/.local/bin/</pre>
+        </div>
+
+        <div class="code-block">
+          <button class="copy-btn" type="button" data-copy="pkgbuild-cmd">Copy</button>
+          <pre id="pkgbuild-cmd">git clone https://github.com/ulaskizilay/sweep.git
+cd sweep/packaging/sweep-cli
+makepkg -si</pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <span>sweep | MIT License</span>
+      <span>
+        <a href="https://github.com/ulaskizilay/sweep">Repository</a> |
+        <a href="https://github.com/ulaskizilay/sweep/blob/main/docs/SAFETY.md">Safety Contract</a> |
+        <a href="https://github.com/ulaskizilay/sweep/blob/main/docs/RULES.md">Rules Reference</a>
+      </span>
+    </div>
+  </footer>
+
+  <script src="main.js" defer></script>
+</body>
+</html>
