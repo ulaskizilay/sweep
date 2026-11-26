@@ -77,6 +77,12 @@ dependency versions are the ones in `Cargo.lock` and a missing crate fails the
 build instead of silently changing the graph. `prepare()` fetches those crates
 before the build starts.
 
+The static `pkgver` in the PKGBUILD is `r0.g0000000`, and `.SRCINFO` carries the
+same string: `makepkg --printsrcinfo` copies the static value rather than running
+`pkgver()`, so the two files cannot drift. The build replaces it with the real
+`r<commits>.<sha>`; a placeholder that looks like a build goes stale with the
+next commit.
+
 Completions and the man pages are **generated from the built binary**, not from
 copies kept in this directory:
 
