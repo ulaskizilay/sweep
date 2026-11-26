@@ -127,11 +127,6 @@ code {
 /* Layout & Grid System */
 .section {
   padding: 72px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.section:last-of-type {
-  border-bottom: none;
 }
 
 .section-header {
@@ -220,7 +215,6 @@ code {
 /* Hero */
 .hero {
   padding: 72px 0;
-  border-bottom: 1px solid var(--border);
 }
 
 .hero-grid {
@@ -456,8 +450,7 @@ code {
 
 /* Footer */
 .site-footer {
-  border-top: 1px solid var(--border);
-  padding: 36px 0;
+  padding: 40px 0 48px;
   color: var(--muted);
   font-size: 0.9rem;
 }
