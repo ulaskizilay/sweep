@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="430" viewBox="0 0 780 430" role="img" aria-label="sweep clean --dry-run previewing a validated cleanup plan with plan hash and skip reasons">
+<defs>
+<linearGradient id="fade" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#161b22" stop-opacity="0.9"/><stop offset="1" stop-color="#161b22" stop-opacity="0.55"/></linearGradient>
+</defs>
+<rect width="780" height="430" rx="10" fill="#0d1117" stroke="#30363d"/>
+<path d="M0 10a10 10 0 0 1 10-10h760a10 10 0 0 1 10 10v26H0z" fill="url(#fade)"/>
+<line x1="0" y1="36" x2="780" y2="36" stroke="#30363d"/>
+<circle cx="20" cy="18" r="5.5" fill="#ff5f56"/>
+<circle cx="38" cy="18" r="5.5" fill="#ffbd2e"/>
+<circle cx="56" cy="18" r="5.5" fill="#27c93f"/>
+<text x="390.0" y="23" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="12" fill="#8b949e">sweep clean --dry-run</text>
+<text x="22.0" y="58" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#39c5cf" font-weight="700" xml:space="preserve">sweep clean — dry run, nothing is deleted</text>
+<text x="22.0" y="88" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#8b949e" xml:space="preserve">  section            rules   items   refused       size</text>
+<text x="22.0" y="109" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">  user-essentials        6     842         0  226.1 MiB</text>
+<text x="22.0" y="130" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">  app-caches            17    1410         2  612.4 MiB</text>
+<text x="22.0" y="151" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">  browsers               9     638         1  480.0 MiB</text>
+<text x="22.0" y="172" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">  dev-tools             49    2915         0    2.9 GiB</text>
+<text x="22.0" y="196" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#3fb950" font-weight="700" xml:space="preserve">  total                 81    5805         3    4.2 GiB</text>
+<text x="22.0" y="220" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#8b949e" xml:space="preserve">  plan hash         </text>
+<text x="165.0" y="220" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">19691f5358a6130b</text>
+<text x="22.0" y="241" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#8b949e" xml:space="preserve">  28 of 81 rules planned something, 0 reported only, 53 were skipped</text>
+<text x="22.0" y="272" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#8b949e" font-weight="700" xml:space="preserve">  skipped / refused</text>
+<text x="22.0" y="293" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">    browsers.firefox.cache         1 refused — </text>
+<text x="366.0" y="293" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#d29922" xml:space="preserve">open_file</text>
+<text x="444.0" y="293" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#8b949e" xml:space="preserve"> (held by firefox)</text>
+<text x="22.0" y="314" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">    app.code.cached-data           2 refused — </text>
+<text x="366.0" y="314" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#d29922" xml:space="preserve">open_file</text>
+<text x="444.0" y="314" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#8b949e" xml:space="preserve"> (held by code)</text>
+<text x="22.0" y="335" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">    user.thumbnails                nothing to remove — 5 subtrees, newer than 30 days</text>
+<text x="22.0" y="368" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#8b949e" xml:space="preserve">  Preview only: 5805 items, 4.2 GiB would be removed permanently.</text>
+<text x="22.0" y="389" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#3fb950" xml:space="preserve">  Nothing was deleted. Run `sweep clean` to apply this plan.</text>
+</svg>

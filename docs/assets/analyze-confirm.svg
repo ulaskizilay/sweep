@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="450" viewBox="0 0 780 450" role="img" aria-label="sweep analyze asking for confirmation before moving a cache directory to the trash">
+<defs>
+<linearGradient id="fade" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#161b22" stop-opacity="0.9"/><stop offset="1" stop-color="#161b22" stop-opacity="0.55"/></linearGradient>
+</defs>
+<rect width="780" height="450" rx="10" fill="#0d1117" stroke="#30363d"/>
+<path d="M0 10a10 10 0 0 1 10-10h760a10 10 0 0 1 10 10v26H0z" fill="url(#fade)"/>
+<line x1="0" y1="36" x2="780" y2="36" stroke="#30363d"/>
+<circle cx="20" cy="18" r="5.5" fill="#ff5f56"/>
+<circle cx="38" cy="18" r="5.5" fill="#ffbd2e"/>
+<circle cx="56" cy="18" r="5.5" fill="#27c93f"/>
+<text x="390.0" y="23" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="12" fill="#8b949e">sweep analyze</text>
+<rect x="17.8" y="32" width="151.2" height="19" fill="#56b6c2"/>
+<text x="22.0" y="46" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#0b0f14" font-weight="700" xml:space="preserve"> /home/you/.cache </text>
+<text x="173.2" y="46" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">  7 entries, 2.8 GiB  sort: size ↑                           </text>
+<text x="22.0" y="67" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">                                                                                            </text>
+<text x="22.0" y="88" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">    1.1 GiB  </text>
+<text x="131.2" y="88" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#9aa4af" xml:space="preserve">    today  </text>
+<text x="223.6" y="88" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">huggingface/                                                        </text>
+<rect x="17.8" y="95" width="109.2" height="19" fill="#30363d"/>
+<rect x="127.0" y="95" width="92.4" height="19" fill="#30363d"/>
+<rect x="219.4" y="95" width="75.6" height="19" fill="#30363d"/>
+<text x="22.0" y="109" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" font-weight="700" xml:space="preserve">  794.0 MiB  </text>
+<text x="131.2" y="109" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#f0f6fc" font-weight="700" xml:space="preserve">    today  </text>
+<text x="223.6" y="109" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" font-weight="700" xml:space="preserve">go-build/</text>
+<text x="299.2" y="109" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">                                                           </text>
+<text x="22.0" y="130" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">  420.0 MiB  </text>
+<text x="131.2" y="130" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#9aa4af" xml:space="preserve"> </text>
+<text x="139.6" y="130" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">┌ confirm ─────────────────────────────────────────────────────┐              </text>
+<text x="22.0" y="151" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">  310.0 MiB  </text>
+<text x="131.2" y="151" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#9aa4af" xml:space="preserve"> </text>
+<text x="139.6" y="151" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">│</text>
+<text x="148.0" y="151" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" font-weight="700" xml:space="preserve">Move to the trash?</text>
+<text x="299.2" y="151" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">                                            │              </text>
+<text x="22.0" y="172" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">   96.0 MiB  </text>
+<text x="131.2" y="172" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#9aa4af" xml:space="preserve"> </text>
+<text x="139.6" y="172" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">│                                                              │              </text>
+<text x="22.0" y="193" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">   64.0 MiB  </text>
+<text x="131.2" y="193" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#9aa4af" xml:space="preserve"> </text>
+<text x="139.6" y="193" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">│/home/you/.cache/go-build                        │              </text>
+<text x="22.0" y="214" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">   18.0 MiB  </text>
+<text x="131.2" y="214" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#9aa4af" xml:space="preserve"> </text>
+<text x="139.6" y="214" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">│794.0 MiB, 8 items — last modified today                      │              </text>
+<text x="22.0" y="235" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">              │                                                              │              </text>
+<text x="22.0" y="256" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">              │</text>
+<text x="148.0" y="256" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#d29922" xml:space="preserve">y  move it      any other key  keep it</text>
+<text x="467.2" y="256" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">                        │              </text>
+<text x="22.0" y="277" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">              │                                                              │              </text>
+<text x="22.0" y="298" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">              └──────────────────────────────────────────────────────────────┘              </text>
+<text x="22.0" y="319" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">                                                                                            </text>
+<text x="22.0" y="340" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">                                                                                            </text>
+<text x="22.0" y="361" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">                                                                                            </text>
+<text x="22.0" y="382" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve"> 16 items measured                                                                          </text>
+<text x="22.0" y="403" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#6e7681" xml:space="preserve"> ↑↓ move  ⏎ open  ⌫ up  s sort  S reverse  / filter  d trash  r rescan  ? help  q quit</text>
+<text x="744.4" y="403" font-family="ui-monospace,SFMono-Regular,'DejaVu Sans Mono',Menlo,Consolas,monospace" font-size="13" fill="#c9d1d9" xml:space="preserve">      </text>
+</svg>
